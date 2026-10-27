@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Records docs/demo.gif on its own Xvfb: two monitors at 1/4 of a 3440x1440 + 1080x1920
+# Records a demo GIF on its own Xvfb: two monitors at 1/4 of a 3440x1440 + 1080x1920
 # layout (860x360 landscape at +0+120, 270x480 portrait at +860+0), stock i3 with a bar,
-# colored windows, and picom with the plugin and examples/picom-wsdir.conf (3440 scaled
-# to 860). Two changes for the demo only: the slides are cropped below the 20 px bar, and
+# colored windows, and picom with the plugin and a style from styles/ in a rule for normal
+# windows. Two changes for the demo only: windows are cropped below the 20 px bar, and
 # picom uses the xrender backend, because glx on Xvfb doesn't redraw the bar.
-# Usage: make && docs/record-demo.sh OUTDIR
+# Usage: make && docs/record-demo.sh OUTDIR [STYLE]   (slide, zoom, fold or cascade;
+# default slide)
 # Environment: PICOM (default: picom on the PATH), DEMO_DISPLAY (default :205).
 set -u
 OUT=$1
@@ -12,12 +13,13 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 PICOM=${PICOM:-$(command -v picom)}
 PLUGIN=$ROOT/build/ws-direction.so
-EXAMPLE=$ROOT/examples/picom-wsdir.conf
+STYLE_FILE=$ROOT/styles/${2:-slide}.conf
 DISP=${DEMO_DISPLAY:-:205}
 SOCK=${XDG_RUNTIME_DIR:-/tmp}/ws-direction-demo.sock
 W=1130 H=480
 [[ $DISP != ":0" ]] || { echo "refusing to run on :0"; exit 2; }
 [[ -f $PLUGIN ]] || { echo "run make first"; exit 2; }
+[[ -f $STYLE_FILE ]] || { echo "no such style: $STYLE_FILE"; exit 2; }
 [[ ! -e /tmp/.X${DISP#:}-lock ]] || { echo "display $DISP in use"; exit 2; }
 mkdir -p "$OUT"
 rm -f "$OUT"/*.log "$OUT"/raw.mkv "$SOCK"
@@ -100,10 +102,17 @@ for ws in 2:Web 3:Chat 5:Music 6:Notes 4:Term 1:IDE; do
 done
 sleep 0.5
 
-# The i3 bar is 20 px high; crop below it, so slides don't cover it.
-sed -e 's/3440/860/g' -e 's/crop-y = "workspace-monitor-y";/crop-y = "workspace-monitor-y + 20";/' \
-	-e 's/crop-height = "workspace-monitor-height";/crop-height = "workspace-monitor-height - 20";/' \
-	-e 's/^backend = "glx";/backend = "xrender";/' "$EXAMPLE" | { echo "plugins = \"$PLUGIN\";"; cat; } >"$OUT/picom.conf"
+# The i3 bar is 20 px high; crop below it, so windows don't cover it.
+{
+	echo "plugins = \"$PLUGIN\";"
+	echo 'backend = "xrender";'
+	echo 'unredir-if-possible = false;'
+	echo 'rules = ({'
+	echo "  match = \"!override_redirect && window_type = 'normal'\";"
+	sed -e 's/crop-y = "workspace-monitor-y";/crop-y = "workspace-monitor-y + 20";/' \
+		-e 's/crop-height = "workspace-monitor-height";/crop-height = "workspace-monitor-height - 20";/' "$STYLE_FILE"
+	echo '});'
+} >"$OUT/picom.conf"
 bg "$OUT/picom.out" "$PICOM" --config "$OUT/picom.conf" --log-file "$OUT/picom.log"
 PICOM_PID=$LAST
 sleep 1.5

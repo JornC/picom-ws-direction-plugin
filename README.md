@@ -2,20 +2,69 @@
 
 A [picom](https://github.com/yshui/picom) plugin that tells animation scripts which way a
 workspace switch went, and which monitor a window's workspace is on. With it a `show` or
-`hide` animation can slide windows the right way and stay on their monitor. picom itself
-knows nothing about workspaces: the plugin reads the window manager's EWMH properties and
-hands the scripts five numbers.
+`hide` animation can move windows the right way and keep them on their monitor. picom
+itself knows nothing about workspaces: the plugin reads the window manager's EWMH
+properties and hands the scripts five numbers. What the scripts do with them is up to
+you; `styles/` has four to start from.
 
-![Workspace switches under i3 on two monitors: vertical slides on the landscape one,
-horizontal slides on the portrait one](docs/demo.gif)
-
-Recorded on Xvfb with i3 and `examples/picom-wsdir.conf`, at a quarter of the real size;
-`docs/record-demo.sh` makes it.
+![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
+horizontal on the portrait one](docs/slide.gif)
 
 It needs a picom with plugin API 0.2, which adds the animation variable hook. No picom
 release has it yet; the `hook-v2` branch of https://github.com/JornC/picom is picom's
 `next` branch with the hook added. An older picom logs `ws-direction: picom is too old`
 and runs without the variables.
+
+## Install
+
+    make
+    make install
+
+`make` builds `build/ws-direction.so` against the installed `<picom/api.h>`; to build
+against a picom source tree instead, run `make PICOM_API_CFLAGS=-I/path/to/picom/include`.
+`make install` copies the plugin to `~/.config/picom/plugins/` and the styles to
+`~/.config/picom/include/ws-direction/`, where picom finds them by name. Then, in
+`picom.conf`:
+
+    plugins = "ws-direction.so";
+    rules = ({
+      match = "!override_redirect && window_type = 'normal'";
+      @include "ws-direction/slide.conf"
+    });
+
+Without `make install`, give both by their full path. picom releases up to v13 only find
+a plugin by name when it comes from `--plugins`, not from the config file (fixed in
+yshui/picom#1547).
+
+## Styles
+
+Each style is one file in `styles/`. To switch, change the name in the `@include` line;
+picom reloads by itself when you save `picom.conf`. Workspaces move along the short side
+of each monitor: up and down on a landscape monitor, sideways on a portrait one. When an
+animation is not part of a workspace switch, every style gives the window a short fade.
+
+**slide**: the new workspace pushes the old one out (shown above).
+
+**zoom**: the old workspace grows a little and fades out, while the new one rises from
+slightly smaller.
+
+![Zoom](docs/zoom.gif)
+
+**fold**: the old workspace folds into one edge while the new one unfolds from the other,
+like a flat cube turning.
+
+![Fold](docs/fold.gif)
+
+**cascade**: the slide, but the windows of a workspace start one after another across the
+monitor.
+
+![Cascade](docs/cascade.gif)
+
+The GIFs are recorded on Xvfb with i3, at a quarter of a 3440x1440 + 1080x1920 layout,
+with the windows cropped below the i3 bar; `docs/record-demo.sh` makes them.
+
+The styles are plain picom animation scripts. To change one, copy it into your config
+instead of including it; each file explains how it works.
 
 ## Variables
 
@@ -33,60 +82,6 @@ and runs without the variables.
 
 Workspaces sort in the order of `_NET_DESKTOP_NAMES`; under i3 that is the order of the
 workspace numbers, with unnumbered names after them.
-
-## Build and install
-
-    make
-
-builds `build/ws-direction.so` against the installed `<picom/api.h>`. Against a picom
-source tree instead:
-
-    make PICOM_API_CFLAGS=-I/path/to/picom/include
-
-Then give picom the plugin's path in its config file:
-
-    plugins = "/path/to/build/ws-direction.so";
-
-or on the command line with `--plugins`. picom releases up to v13 only find a bare file
-name in their plugin directories when it comes from `--plugins`, not from the config file
-(fixed in yshui/picom#1547).
-
-## Example
-
-Vertical slides on one monitor, and a short fade when the direction is 0. The script
-language has no conditionals, so `var-slide = workspace-direction ^ 2` (1 for a slide,
-0 for a fade) mixes the two cases.
-
-    rules = ({
-      match = "!override_redirect && window_type = 'normal'";
-      animations = (
-        {
-          triggers = ["hide"];
-          var-slide = "workspace-direction ^ 2";
-          var-time = "0.25 * var-slide + 0.1 * (1 - var-slide)";
-          offset-y = { curve = "cubic-bezier(0.25, 0.1, 0.25, 1)"; duration = "var-time"; start = 0; end = "0 - workspace-direction * workspace-monitor-height"; };
-          opacity = { curve = "linear"; duration = "var-time"; start = "window-raw-opacity-before"; end = "window-raw-opacity-before * var-slide"; };
-          crop-x = "workspace-monitor-x";
-          crop-y = "workspace-monitor-y";
-          crop-width = "workspace-monitor-width";
-          crop-height = "workspace-monitor-height";
-        },
-        {
-          triggers = ["show", "open"];
-          var-slide = "workspace-direction ^ 2";
-          var-time = "0.25 * var-slide + 0.1 * (1 - var-slide)";
-          offset-y = { curve = "cubic-bezier(0.25, 0.1, 0.25, 1)"; duration = "var-time"; start = "workspace-direction * workspace-monitor-height"; end = 0; };
-          opacity = { curve = "linear"; duration = "var-time"; start = "window-raw-opacity * var-slide"; end = "window-raw-opacity"; };
-          crop-x = "workspace-monitor-x";
-          crop-y = "workspace-monitor-y";
-          crop-width = "workspace-monitor-width";
-          crop-height = "workspace-monitor-height";
-        }
-      );
-    });
-
-`examples/picom-wsdir.conf` is the two-monitor version: vertical slides on one monitor,
-horizontal on the other, each cropped to its own monitor.
 
 ## How it works
 

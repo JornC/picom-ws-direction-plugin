@@ -12,7 +12,15 @@ build/ws-direction.so: ws_direction.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) -shared -o $@ $< $(LDLIBS)
 
+# Puts the plugin and the styles where picom finds them by name, for
+#   plugins = "ws-direction.so";   and   @include "ws-direction/slide.conf"
+PICOM_CONFIG_DIR ?= $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/picom
+
+install: build/ws-direction.so
+	install -Dm755 build/ws-direction.so $(PICOM_CONFIG_DIR)/plugins/ws-direction.so
+	install -Dm644 -t $(PICOM_CONFIG_DIR)/include/ws-direction styles/*.conf
+
 clean:
 	rm -rf build
 
-.PHONY: clean
+.PHONY: install clean

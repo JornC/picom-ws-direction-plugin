@@ -4,10 +4,10 @@
 #
 # Phase 1: a nested Xvfb with two monitors (DPT 3440x1440 at +0+480, HDT 1080x1920 at
 # +3440+0), stock i3, xterms on several workspaces, and picom with the plugin,
-# examples/picom-wsdir.conf and debug logging. It runs i3 commands through i3-msg and checks
+# styles/slide.conf and debug logging. It runs i3 commands through i3-msg and checks
 # the workspace-direction that the plugin logs for every window that shows, opens or
 # hides. It also takes screenshots in the middle of slowed-down slides, to check the
-# example config slides the right way and stays on its monitor. Then it runs picom with
+# slide style slides the right way and stays on its monitor. Then it runs picom with
 # tests/picom-anim.conf, whose scripts don't read the variables, and checks the plugin
 # is loaded but never asked (the hook calls a provider only for scripts that read its
 # variable), and with a config without "open" animations to check the startup seed.
@@ -38,7 +38,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 PICOM=${PICOM:-$(command -v picom)}
 I3=${I3:-/usr/bin/i3}
-CONFIG=$ROOT/examples/picom-wsdir.conf
+STYLE=$ROOT/styles/slide.conf
 PLAIN_CONFIG=$HERE/picom-anim.conf
 DISP=${WSDIR_DISPLAY:-:91}
 WORK=${WSDIR_WORK:-${XDG_RUNTIME_DIR:-/tmp}/wsdir-${DISP#:}}
@@ -68,7 +68,19 @@ rm -f "$OUT"/*.log "$OUT"/*.out "$SOCK"
 [[ -f $PLUGIN ]] || die "plugin not found: $PLUGIN (run make)"
 # picom loads a plugin by its full path, and /proc/<pid>/maps shows that path.
 PLUGIN=$(realpath "$PLUGIN")
-{ echo "plugins = \"$PLUGIN\";"; cat "$CONFIG"; } >"$OUT/wsdir-plugin.conf"
+# The slide style in a rule for normal windows. Copied in, not included, so the checks
+# below can change its timing with sed.
+{
+	echo "plugins = \"$PLUGIN\";"
+	echo 'backend = "glx";'
+	echo 'vsync = true;'
+	echo 'use-damage = true;'
+	echo 'unredir-if-possible = false;'
+	echo 'rules = ({'
+	echo "  match = \"!override_redirect && window_type = 'normal'\";"
+	cat "$STYLE"
+	echo '});'
+} >"$OUT/wsdir-plugin.conf"
 CONFIG=$OUT/wsdir-plugin.conf
 
 # --- process handling: only ever stop PIDs started here ---
@@ -260,9 +272,9 @@ cc -O2 -Wall -o "$OUT/fakewm" "$HERE/fakewm.c" $(pkg-config --cflags --libs xcb)
 if "$PICOM" --config "$CONFIG" --diagnostics >"$OUT/diagnostics.out" 2>&1 &&
 	grep -q "Config file used: $CONFIG" "$OUT/diagnostics.out" &&
 	! grep -qiE "error.*(config|script|parse|line)" "$OUT/diagnostics.out"; then
-	pass "example config loads (picom --diagnostics)"
+	pass "slide style loads (picom --diagnostics)"
 else
-	fail "example config loads (picom --diagnostics)" "see $OUT/diagnostics.out"
+	fail "slide style loads (picom --diagnostics)" "see $OUT/diagnostics.out"
 fi
 if grep -q "picom is too old" "$OUT/diagnostics.out"; then
 	die "this picom has no animation variable hook (plugin API 0.2), see $OUT/diagnostics.out"
@@ -417,7 +429,7 @@ for gap in 0.005 0.03 0.06; do
 		4:Misc 2:Web 1:IDE
 done
 
-# Screenshot checks: the example config made slow (6 s) and linear, so a screenshot
+# Screenshot checks: the slide style made slow (6 s) and linear, so a screenshot
 # taken about 1.5 s into a switch shows both workspaces, 25% of the way.
 # DPT: 1 is red, 2 is blue. HDT: 3 is green, 5 is yellow.
 stop_picom
