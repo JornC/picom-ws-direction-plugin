@@ -342,7 +342,7 @@ rules = ({
 			<h2>Limits</h2>
 			<ul>
 				<li>Tested with i3.</li>
-				<li>cascade can flicker: during a switch, a window that is already moving in is sometimes not drawn for a frame or two. That is a bug in picom's damage tracking, not in the style; with <code>use-damage = false</code> it doesn't happen.</li>
+				<li>With picom's xrender backend, cascade can flicker: during a switch, a window that is already moving in is sometimes not drawn for a frame or two. That is a bug in the xrender backend, not in the style; the glx backend doesn't have it, and with <code>use-damage = false</code> it doesn't happen either.</li>
 				<li>A switch made while picom isn't compositing (a fullscreen window with <code>unredir-if-possible</code>) can be missed. The next slide may then go the wrong way.</li>
 				<li>Each animation start waits for a reply from the X server: about 20 µs on a quiet server, a few milliseconds when it's busy.</li>
 			</ul>
