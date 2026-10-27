@@ -184,7 +184,7 @@ footer {
 		<li><a href="#how">4:how it works</a></li>
 		<li><a href="#limits">5:limits</a></li>
 	</ol>
-	<a class="status mono" href="https://github.com/JornC/picom-ws-direction">JornC/picom-ws-direction</a>
+	<a class="status mono" href="https://github.com/JornC/picom-ws-direction-plugin">JornC/picom-ws-direction-plugin</a>
 </nav>
 
 <div class="page">
@@ -243,14 +243,14 @@ footer {
   crop-width = "workspace-monitor-width";
   crop-height = "workspace-monitor-height";
 });</code></pre>
-			<p>The full example, <a href="https://github.com/JornC/picom-ws-direction/blob/main/examples/picom-wsdir.conf"><code>examples/picom-wsdir.conf</code></a>, also fades windows that aren't part of a switch, and slides sideways on a second monitor. It's the config in the demo.</p>
+			<p>The full example, <a href="https://github.com/JornC/picom-ws-direction-plugin/blob/main/examples/picom-wsdir.conf"><code>examples/picom-wsdir.conf</code></a>, also fades windows that aren't part of a switch, and slides sideways on a second monitor. It's the config in the demo.</p>
 		</section>
 		</div>
 
 		<section id="install" class="text">
 			<h2>Install</h2>
 			<ol class="step-list">
-				<li>Use a picom with the animation variable hook (plugin API 0.2). It's proposed upstream in <a href="PR2_URL">yshui/picom PR2_NUMBER</a>. Until a picom release has it, build picom from the <a href="https://github.com/JornC/picom/tree/hook-v2"><code>hook-v2</code> branch</a>.</li>
+				<li>Use a picom with plugin API 0.2, which adds the animation variable hook. No picom release has it yet: build picom from the <a href="https://github.com/JornC/picom/tree/hook-v2"><code>hook-v2</code> branch</a>, which is picom's <code>next</code> branch with the hook added.</li>
 				<li>Build the plugin:
 <pre><code>make</code></pre>
 					To build against a picom source tree instead of the installed headers:
@@ -278,7 +278,7 @@ footer {
 	</main>
 
 	<footer class="text">
-		<p>ws-direction is licensed under the MPL-2.0. The source, the tests and the script that records the demo are on <a href="https://github.com/JornC/picom-ws-direction">GitHub</a>.</p>
+		<p>ws-direction is licensed under the MPL-2.0. The source, the tests and the script that records the demo are on <a href="https://github.com/JornC/picom-ws-direction-plugin">GitHub</a>.</p>
 	</footer>
 </div>
 
