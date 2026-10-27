@@ -156,19 +156,23 @@ sleep 1.5
 bg "$OUT/ffmpeg.log" ffmpeg -y -f x11grab -draw_mouse 0 -framerate 50 -video_size ${W}x${H} \
 	-i "$DISP.0+0,0" -c:v libx264rgb -preset ultrafast -qp 0 "$OUT/raw.mkv"
 FF=$LAST
-sleep 1.2
+sleep 0.5
 
+# Both sequences end on the workspaces they start on (1:IDE and 4:Term), so the GIF loops
+# without a jump.
 if [[ -n $LENGTH ]]; then
 	STEPS=(2:Web 1:IDE)
 	PAUSE=$(awk -v l="$LENGTH" 'BEGIN { print l + 0.8 }')
 else
-	STEPS=(2:Web 3:Chat 1:IDE 5:Music 6:Notes 4:Term 2:Web)
+	STEPS=(2:Web 3:Chat 1:IDE 5:Music 6:Notes 4:Term)
 	PAUSE=1.1
 fi
 for ws in "${STEPS[@]}"; do
 	i3cmd "workspace $ws"
 	sleep "$PAUSE"
 done
+# Back to the focus of the start; 1:IDE is already shown, so nothing animates.
+i3cmd 'workspace 1:IDE'
 sleep 0.4
 
 kill -INT "$FF"
