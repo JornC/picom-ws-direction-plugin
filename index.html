@@ -214,27 +214,35 @@ footer {
 					<source src="slide.webm" type="video/webm">
 					<source src="slide.mp4" type="video/mp4">
 				</video>
-				<figcaption id="demo-caption" class="text">Two monitors under i3, recorded at a quarter of their real size. Going to a higher workspace brings it in from below on the landscape monitor, and from the right on the portrait one. Going back reverses the slide. This is the slide style; there are three more below.</figcaption>
+				<figcaption id="demo-caption" class="text">Two monitors under i3, recorded at a quarter of their real size. Going to a higher workspace brings it in from below on the landscape monitor, and from the right on the portrait one. Going back reverses the slide. This is the slide style; there are five more below.</figcaption>
 			</figure>
 		</section>
 
 		<section id="styles">
 			<div class="text">
 				<h2>Styles</h2>
-				<p>The plugin only hands picom numbers; the animation itself is a few lines of config, so it can look however you like. Four styles come with it, and one line in <code>picom.conf</code> picks one. Change the name and save; picom reloads by itself.</p>
+				<p>The plugin only hands picom numbers; the animation itself is a few lines of config, so it can look however you like. Six styles come with it, and one line in <code>picom.conf</code> picks one. Change the name and save; picom reloads by itself.</p>
 <pre><code>@include "ws-direction/fold.conf"</code></pre>
 			</div>
 			<div class="styles">
 				<figure>
-					<video class="screen" autoplay muted loop playsinline poster="zoom.png" width="1130" height="480" aria-label="The zoom style">
-						<source src="zoom.webm" type="video/webm">
-						<source src="zoom.mp4" type="video/mp4">
+					<video class="screen" muted loop playsinline preload="none" poster="push.png" width="1130" height="480" aria-label="The push style">
+						<source src="push.webm" type="video/webm">
+						<source src="push.mp4" type="video/mp4">
 					</video>
-					<h3 class="mono">zoom</h3>
-					<p>The old workspace grows a little and fades out, while the new one rises from slightly smaller.</p>
+					<h3 class="mono">push</h3>
+					<p>The new workspace slides in over the old one, which drifts back and darkens, like a card put on a stack.</p>
 				</figure>
 				<figure>
-					<video class="screen" autoplay muted loop playsinline poster="fold.png" width="1130" height="480" aria-label="The fold style">
+					<video class="screen" muted loop playsinline preload="none" poster="wipe.png" width="1130" height="480" aria-label="The wipe style">
+						<source src="wipe.webm" type="video/webm">
+						<source src="wipe.mp4" type="video/mp4">
+					</video>
+					<h3 class="mono">wipe</h3>
+					<p>Nothing moves: an edge sweeps across the monitor and uncovers the new workspace.</p>
+				</figure>
+				<figure>
+					<video class="screen" muted loop playsinline preload="none" poster="fold.png" width="1130" height="480" aria-label="The fold style">
 						<source src="fold.webm" type="video/webm">
 						<source src="fold.mp4" type="video/mp4">
 					</video>
@@ -242,12 +250,20 @@ footer {
 					<p>The old workspace folds into one edge while the new one unfolds from the other, like a flat cube turning.</p>
 				</figure>
 				<figure>
-					<video class="screen" autoplay muted loop playsinline poster="cascade.png" width="1130" height="480" aria-label="The cascade style">
+					<video class="screen" muted loop playsinline preload="none" poster="cascade.png" width="1130" height="480" aria-label="The cascade style">
 						<source src="cascade.webm" type="video/webm">
 						<source src="cascade.mp4" type="video/mp4">
 					</video>
 					<h3 class="mono">cascade</h3>
-					<p>The slide, but the windows start one after another across the monitor.</p>
+					<p>The slide, but the windows start one after another and land together.</p>
+				</figure>
+				<figure>
+					<video class="screen" muted loop playsinline preload="none" poster="warp.png" width="1130" height="480" aria-label="The warp style">
+						<source src="warp.webm" type="video/webm">
+						<source src="warp.mp4" type="video/mp4">
+					</video>
+					<h3 class="mono">warp</h3>
+					<p>The old windows fly outward past you while the new ones come out of the middle of the monitor.</p>
 				</figure>
 			</div>
 		</section>
@@ -346,7 +362,7 @@ function focusWorkspace() {
 addEventListener("scroll", () => requestAnimationFrame(focusWorkspace), { passive: true });
 focusWorkspace();
 
-// Videos play while they are on screen, and not at all with reduced motion.
+// Videos load and play while they are on screen, and not at all with reduced motion.
 const videos = [...document.querySelectorAll("video")];
 if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
 	for (const v of videos) {
