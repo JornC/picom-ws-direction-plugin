@@ -12,9 +12,10 @@ horizontal slides on the portrait one](docs/demo.gif)
 Recorded on Xvfb with i3 and `examples/picom-wsdir.conf`, at a quarter of the real size;
 `docs/record-demo.sh` makes it.
 
-It needs a picom with the animation variable hook (plugin API 0.2, yshui/picom pull
-request: link to follow). An older picom logs `ws-direction: picom is too old` and runs
-without the variables.
+It needs a picom with plugin API 0.2, which adds the animation variable hook. No picom
+release has it yet; the `hook-v2` branch of https://github.com/JornC/picom is picom's
+`next` branch with the hook added. An older picom logs `ws-direction: picom is too old`
+and runs without the variables.
 
 ## Variables
 
