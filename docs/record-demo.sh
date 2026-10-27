@@ -77,29 +77,56 @@ EOF
 bg "$OUT/i3.log" i3 -c "$OUT/i3.conf"
 for _ in $(seq 50); do i3-msg -s "$SOCK" -t get_version >/dev/null 2>&1 && break; sleep 0.1; done
 
-# win INSTANCE BG LABEL
+# win INSTANCE BG LABEL FILE LINE: a terminal with a heading and text from this repo, so
+# that moving and scaling show. It redraws when i3 resizes it, so the heading stays on top.
 win() {
-	bg "$OUT/xterm-$1.log" xterm -name "$1" -bg "$2" -fg '#f4f6fa' -fa 'DejaVu Sans Mono:bold' -fs 15 \
-		+sb -b 14 -bw 0 -e sh -c "printf '\033[?25l\n%s' '$3'; exec sleep 100000"
+	bg "$OUT/xterm-$1.log" env L="$3" F="$4" N="$5" xterm -name "$1" -bg "$2" -fg '#eef1f6' \
+		-fa 'DejaVu Sans Mono' -fs 6 +sb -b 8 -bw 0 -e bash -c '
+			draw() {
+				clear
+				printf "\033[?25l\033[1m%s\033[0m\n\n" "$L"
+				tail -n +"$N" "$F" | expand -t 4 | cut -c1-$(($(tput cols) - 1)) |
+					head -n $(($(tput lines) - 3))
+			}
+			trap draw WINCH
+			draw
+			while :; do sleep 0.2; done'
 	sleep 0.3
 }
-win w1a '#2f5d9e' '1:IDE  editor'
-win w1b '#24497d' '1:IDE  build'
-win w2a '#2f8a6f' '2:Web  browser'
-win w2b '#246b56' '2:Web  docs'
-win w3a '#8a4fa8' '3:Chat'
-win w4a '#b5652b' '4:Term'
-win w5a '#a83e5a' '5:Music'
-win w6a '#6f7a2a' '6:Notes'
+# 1:IDE: three columns.
+win w1a '#2f5d9e' '1:IDE  editor' "$ROOT/ws_direction.c" 200
+win w1b '#29528c' '1:IDE  build' "$ROOT/tests/run.sh" 250
+win w1c '#22467a' '1:IDE  notes' "$ROOT/README.md" 40
+# 2:Web: a 2x2 grid.
+win w2a '#2f8a6f' '2:Web  docs' "$ROOT/README.md" 1
+win w2b '#287a62' '2:Web  issues' "$ROOT/styles/fold.conf" 1
+i3cmd '[instance="^w2a$"] focus'
+i3cmd 'split v'
+win w2c '#226a55' '2:Web  search' "$ROOT/LICENSE" 1
+i3cmd '[instance="^w2b$"] focus'
+i3cmd 'split v'
+win w2d '#1c5b49' '2:Web  mail' "$ROOT/docs/record-demo.sh" 1
+# 3:Chat: one wide window, two stacked on the right.
+win w3a '#8a4fa8' '3:Chat  general' "$ROOT/ws_direction.c" 40
+win w3b '#7a4595' '3:Chat  people' "$ROOT/Makefile" 1
+i3cmd '[instance="^w3b$"] focus'
+i3cmd 'split v'
+win w3c '#6b3c83' '3:Chat  files' "$ROOT/styles/slide.conf" 1
+# The portrait monitor stacks windows by itself.
+win w4a '#b5652b' '4:Term  shell' "$ROOT/tests/run.sh" 40
+win w4b '#9e5824' '4:Term  logs' "$ROOT/tests/fakewm.c" 1
+win w5a '#a83e5a' '5:Music  queue' "$ROOT/README.md" 80
+win w5b '#94364f' '5:Music  player' "$ROOT/styles/warp.conf" 1
+win w5c '#802e44' '5:Music  lyrics' "$ROOT/LICENSE" 60
+win w6a '#6f7a2a' '6:Notes' "$ROOT/README.md" 120
 sleep 1
 # Focus every window once, so no workspace stays marked urgent.
-for ws in 2:Web 3:Chat 5:Music 6:Notes 4:Term 1:IDE; do
-	i3cmd "workspace $ws"
-	i3cmd 'focus left'
-	sleep 0.2
-	i3cmd 'focus right'
-	sleep 0.2
+for w in w2a w2b w2c w2d w3a w3b w3c w5a w5b w5c w6a w4a w4b w1a w1b w1c; do
+	i3cmd "[instance=\"^$w\$\"] focus"
+	sleep 0.15
 done
+i3cmd 'workspace 4:Term'
+i3cmd 'workspace 1:IDE'
 sleep 0.5
 
 # The i3 bar is 20 px high; crop below it, so windows don't cover it.
@@ -136,6 +163,6 @@ kill -INT "$FF"
 wait "$FF" 2>/dev/null
 kill -0 "$PICOM_PID" 2>/dev/null || { echo "picom stopped, see $OUT/picom.log"; exit 1; }
 ffmpeg -v error -y -i "$OUT/raw.mkv" -vf \
-	"fps=50,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" \
+	"fps=25,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" \
 	-loop 0 "$OUT/demo.gif"
 echo "wrote $OUT/demo.gif"

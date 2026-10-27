@@ -5,7 +5,7 @@ workspace switch went, and which monitor a window's workspace is on. With it a `
 `hide` animation can move windows the right way and keep them on their monitor. picom
 itself knows nothing about workspaces: the plugin reads the window manager's EWMH
 properties and hands the scripts five numbers. What the scripts do with them is up to
-you; `styles/` has four to start from.
+you; `styles/` has six to start from.
 
 ![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
 horizontal on the portrait one](docs/slide.gif)
@@ -43,25 +43,21 @@ picom reloads by itself when you save `picom.conf`. Workspaces move along the sh
 of each monitor: up and down on a landscape monitor, sideways on a portrait one. When an
 animation is not part of a workspace switch, every style gives the window a short fade.
 
-**slide**: the new workspace pushes the old one out (shown above).
+![All six styles at once, going through the same workspace switches](docs/styles.gif)
 
-**zoom**: the old workspace grows a little and fades out, while the new one rises from
-slightly smaller.
-
-![Zoom](docs/zoom.gif)
-
-**fold**: the old workspace folds into one edge while the new one unfolds from the other,
-like a flat cube turning.
-
-![Fold](docs/fold.gif)
-
-**cascade**: the slide, but the windows of a workspace start one after another across the
-monitor.
-
-![Cascade](docs/cascade.gif)
+- **slide**: the new workspace pushes the old one out.
+- **push**: the new workspace slides in over the old one, which drifts back and darkens,
+  like a card put on a stack.
+- **wipe**: nothing moves; an edge sweeps across the monitor and uncovers the new
+  workspace.
+- **fold**: the old workspace folds into one edge while the new one unfolds from the
+  other, like a flat cube turning.
+- **cascade**: the slide, but the windows start one after another and land together.
+- **warp**: the old windows fly outward past you while the new ones come out of the
+  middle of the monitor.
 
 The GIFs are recorded on Xvfb with i3, at a quarter of a 3440x1440 + 1080x1920 layout,
-with the windows cropped below the i3 bar; `docs/record-demo.sh` makes them.
+with the windows cropped below the i3 bar; `docs/record-styles.sh` makes them.
 
 The styles are plain picom animation scripts. To change one, copy it into your config
 instead of including it; each file explains how it works.
