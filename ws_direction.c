@@ -3,7 +3,7 @@
 
 /// picom plugin that works out the direction of a workspace switch, so animation scripts
 /// can slide windows the right way, and the monitor of a window's workspace, so they can
-/// crop to it. Script variables:
+/// crop to it. Animation variables:
 ///
 ///   workspace-direction       1 if the new workspace sorts after the old one, -1 if
 ///                             before, 0 if the animation was not caused by a workspace
@@ -12,20 +12,48 @@
 ///                             the monitor that shows the window's workspace. For other
 ///                             windows and triggers: the monitor that fully contains the
 ///                             window, else the whole screen (like window-monitor-*).
+///                             For a window that closes: always the whole screen, as the
+///                             window is gone and can't be looked up; use
+///                             window-monitor-* there.
 ///
-/// It only uses EWMH data the window manager already sets: _NET_CURRENT_DESKTOP,
-/// _NET_DESKTOP_NAMES and _NET_DESKTOP_VIEWPORT on the root window, and _NET_WM_DESKTOP
-/// on client windows.
+/// For workspaces it only uses EWMH data the window manager already sets:
+/// _NET_CURRENT_DESKTOP, _NET_DESKTOP_NAMES and _NET_DESKTOP_VIEWPORT on the root window,
+/// and _NET_WM_DESKTOP on client windows. Monitors come from RandR, a window's place from
+/// GetGeometry.
 ///
 /// The order in which a window manager changes these properties and maps and unmaps
 /// windows is not specified, and those changes can reach picom over several frames. So we
 /// don't act on events. We remember, per monitor, the workspaces it showed recently, and
-/// when we last saw a part of each switch between them. On the first call in each frame we
-/// read the root properties again and update that. When a window starts a show, open or
-/// hide animation, we look for a recent switch to (or away from) its workspace on its
+/// when we last saw a part of each switch between them. On the first call in each frame
+/// we read the root properties again and update that. When a window starts a show, open
+/// or hide animation, we look for a recent switch to (or away from) its workspace on its
 /// monitor. A window that shows on a workspace we didn't think was visible also counts as
 /// a switch, because some window managers map the new windows before they update the root
 /// properties.
+///
+/// We only learn about a switch when picom asks for a value, i.e. when a window starts
+/// an animation whose script reads the variables. A switch that starts no animation (for
+/// example one made while picom is unredirected, see unredir-if-possible) may not be
+/// seen: we see it only if a window of the new workspace still starts an animation once
+/// picom redirects the screen again. Otherwise the next switch is judged against the
+/// last workspace we saw: back to that workspace gives 0; elsewhere the windows that
+/// show get the sign relative to it, and the windows that hide get 0.
+///
+/// Each animation start costs one round trip to the X server, on picom's main thread.
+/// Usually that is well under a millisecond, but the reply waits behind whatever the
+/// server is doing (other clients, the window manager's own burst of requests during a
+/// switch, picom's drawing of the previous frame). The first start in a frame can then
+/// wait tens of milliseconds, for example when many windows open at once.
+///
+/// We connect to the display named by DISPLAY, like picom itself. The variables are only
+/// added once the X connection is up. Without it, every animation whose script reads
+/// them fails to compile: picom logs 'variable name "workspace-direction" is not
+/// defined' and runs without that animation.
+///
+/// Give picom the plugin's path in its config file (plugins =
+/// "/path/to/ws-direction.so";) or with --plugins. picom releases up to v13 find a bare
+/// file name in their plugin directories only when it comes from --plugins, not from the
+/// config file (fixed upstream in yshui/picom#1547).
 ///
 /// Set WS_DIRECTION_LOG to a file to log every decision there, in picom's log format.
 
@@ -40,6 +68,7 @@
 #include <picom/api.h>
 #include <xcb/randr.h>
 #include <xcb/xcb.h>
+#include <xcb/xcbext.h>
 
 /// How long a workspace switch stays usable after we last saw a part of it (the root
 /// window change, or a window of it that shows or hides). The window manager makes all
@@ -74,8 +103,8 @@ struct ws_order {
 struct ws_visit {
 	char *name;
 	struct ws_order order;
-	/// When we last saw a part of the switch to this workspace, 0 if we don't know what
-	/// the monitor showed before it.
+	/// When we last saw a part of the switch to this workspace, 0 if we don't know
+	/// what the monitor showed before it.
 	uint64_t time_us;
 	/// The frame in which we last saw a part of the switch to this workspace.
 	uint64_t frame;
@@ -90,8 +119,8 @@ struct ws_monitor {
 	/// through this, so they stay valid when the monitor list changes.
 	bool has_viewport;
 	int32_t viewport_x, viewport_y;
-	/// The workspaces this monitor showed, oldest first. The last one is shown now. Each
-	/// one after the first is a switch from the one before it.
+	/// The workspaces this monitor showed, oldest first. The last one is shown now.
+	/// Each one after the first is a switch from the one before it.
 	struct ws_visit visits[WS_HISTORY];
 	unsigned n_visits;
 };
@@ -114,9 +143,13 @@ static struct {
 	struct ws_rect screen;
 	FILE *log;
 
-	/// The frame of the last call, and when we saw it start.
+	/// The frame of the last call (UINT64_MAX before the first one), and when we saw
+	/// it start.
 	uint64_t frame;
 	uint64_t frame_time_us;
+	/// How often we waited for the X server while working out the variables of one
+	/// window. For the log.
+	unsigned n_waits;
 
 	/// _NET_DESKTOP_NAMES, pointers into `names_buf`.
 	const char *names[WS_MAX_DESKTOPS];
@@ -133,9 +166,9 @@ static struct {
 
 	struct ws_monitor tracked[WS_MAX_MONITORS];
 	unsigned n_tracked;
-} wsd = {.current = -1};
+} wsd = {.current = -1, .frame = UINT64_MAX};
 
-static void ws_log(const char *fmt, ...) {
+__attribute__((format(printf, 1, 2))) static void ws_log(const char *fmt, ...) {
 	if (wsd.log == NULL) {
 		return;
 	}
@@ -158,6 +191,19 @@ static uint64_t ws_now_us(void) {
 	return (uint64_t)now.tv_sec * 1000000 + (uint64_t)now.tv_nsec / 1000;
 }
 
+/// Take the reply to a request, waiting for it if it hasn't arrived yet. Returns NULL if
+/// the request failed. The caller frees the reply.
+static void *ws_reply(unsigned int sequence) {
+	void *reply = NULL;
+	xcb_generic_error_t *err = NULL;
+	if (!xcb_poll_for_reply(wsd.c, sequence, &reply, &err)) {
+		wsd.n_waits++;
+		reply = xcb_wait_for_reply(wsd.c, sequence, &err);
+	}
+	free(err);
+	return reply;
+}
+
 static xcb_atom_t ws_atom(const char *name) {
 	auto reply = xcb_intern_atom_reply(
 	    wsd.c, xcb_intern_atom(wsd.c, 0, (uint16_t)strlen(name), name), NULL);
@@ -166,16 +212,27 @@ static xcb_atom_t ws_atom(const char *name) {
 	return ret;
 }
 
-/// Read a property. Returns NULL if it is not set. The caller frees the reply.
-static xcb_get_property_reply_t *
-ws_get_prop(xcb_window_t w, xcb_atom_t atom, xcb_atom_t type, uint32_t max_len) {
-	auto reply = xcb_get_property_reply(
-	    wsd.c, xcb_get_property(wsd.c, 0, w, atom, type, 0, max_len), NULL);
+/// Ask for a property. Pair with ws_prop_reply.
+static xcb_get_property_cookie_t
+ws_prop_request(xcb_window_t w, xcb_atom_t atom, xcb_atom_t type, uint32_t max_len) {
+	return xcb_get_property(wsd.c, 0, w, atom, type, 0, max_len);
+}
+
+/// Take the reply to ws_prop_request. Returns NULL if the property is not set. The
+/// caller frees the reply.
+static xcb_get_property_reply_t *ws_prop_reply(xcb_get_property_cookie_t cookie) {
+	xcb_get_property_reply_t *reply = ws_reply(cookie.sequence);
 	if (reply != NULL && (reply->type == XCB_ATOM_NONE || reply->value_len == 0)) {
 		free(reply);
 		return NULL;
 	}
 	return reply;
+}
+
+/// Read a property, in a round trip of its own. Returns NULL if it is not set.
+static xcb_get_property_reply_t *
+ws_get_prop(xcb_window_t w, xcb_atom_t atom, xcb_atom_t type, uint32_t max_len) {
+	return ws_prop_reply(ws_prop_request(w, atom, type, max_len));
 }
 
 static struct ws_order ws_order_of(const char *name, unsigned position) {
@@ -331,7 +388,8 @@ static void ws_add_switch(struct ws_monitor *m, unsigned k, unsigned desktop, xc
 
 	char source[32];
 	ws_source(source, w);
-	ws_log("Workspace switch on monitor at %d,%d: \"%s\" -> \"%s\", direction %d (from %s)",
+	ws_log("Workspace switch on monitor at %d,%d: \"%s\" -> \"%s\", direction %d "
+	       "(from %s)",
 	       m->viewport_x, m->viewport_y, m->visits[k - 1].name, m->visits[k].name,
 	       ws_switch_direction(m, k), source);
 }
@@ -357,16 +415,22 @@ static struct ws_monitor *ws_get_monitor(unsigned desktop, xcb_window_t w) {
 	for (unsigned k = 0; k < m->n_visits; k++) {
 		auto position = ws_find_desktop(m->visits[k].name);
 		if (position >= 0) {
-			m->visits[k].order = ws_order_of(m->visits[k].name, (unsigned)position);
+			m->visits[k].order =
+			    ws_order_of(m->visits[k].name, (unsigned)position);
 		}
 	}
 	return m;
 }
 
-/// Read _NET_WM_DESKTOP of a window. Returns -1 if it is not set, or not a single desktop
-/// we know.
-static int64_t ws_window_desktop(xcb_window_t w) {
-	auto prop = ws_get_prop(w, wsd.a_wm_desktop, XCB_ATOM_CARDINAL, 1);
+/// Ask for _NET_WM_DESKTOP of a window. Pair with ws_window_desktop_reply.
+static xcb_get_property_cookie_t ws_window_desktop_request(xcb_window_t w) {
+	return ws_prop_request(w, wsd.a_wm_desktop, XCB_ATOM_CARDINAL, 1);
+}
+
+/// Take the reply to ws_window_desktop_request. Returns -1 if the property is not set,
+/// or not a single desktop we know.
+static int64_t ws_window_desktop_reply(xcb_get_property_cookie_t cookie) {
+	auto prop = ws_prop_reply(cookie);
 	int64_t ret = -1;
 	if (prop != NULL && prop->format == 32) {
 		ret = *(uint32_t *)xcb_get_property_value(prop);
@@ -378,12 +442,38 @@ static int64_t ws_window_desktop(xcb_window_t w) {
 	return ret;
 }
 
-/// Read the root window properties and the monitors. Returns whether the root
-/// properties changed since the last time.
-static bool ws_read_root(void) {
+/// Read _NET_WM_DESKTOP of a window, in a round trip of its own.
+static int64_t ws_window_desktop(xcb_window_t w) {
+	return ws_window_desktop_reply(ws_window_desktop_request(w));
+}
+
+/// The requests for the root window properties, the screen size and the monitors, sent
+/// together so they take one round trip. Pair ws_read_root_request with
+/// ws_read_root_reply.
+struct ws_root_requests {
+	xcb_get_property_cookie_t current, viewports, names;
+	xcb_get_geometry_cookie_t screen;
+	xcb_randr_get_monitors_cookie_t monitors;
+};
+
+static struct ws_root_requests ws_read_root_request(void) {
+	return (struct ws_root_requests){
+	    .current = ws_prop_request(wsd.root, wsd.a_current_desktop, XCB_ATOM_CARDINAL, 1),
+	    .viewports = ws_prop_request(wsd.root, wsd.a_desktop_viewport,
+	                                 XCB_ATOM_CARDINAL, WS_MAX_DESKTOPS * 2),
+	    .names = ws_prop_request(wsd.root, wsd.a_desktop_names, wsd.a_utf8_string,
+	                             UINT32_MAX / 4),
+	    .screen = xcb_get_geometry(wsd.c, wsd.root),
+	    .monitors = xcb_randr_get_monitors(wsd.c, wsd.root, 1),
+	};
+}
+
+/// Take the replies to ws_read_root_request. Returns whether the root properties changed
+/// since the last time.
+static bool ws_read_root_reply(struct ws_root_requests requests) {
 	bool changed = false;
 
-	auto current = ws_get_prop(wsd.root, wsd.a_current_desktop, XCB_ATOM_CARDINAL, 1);
+	auto current = ws_prop_reply(requests.current);
 	int64_t new_current = -1;
 	if (current != NULL && current->format == 32) {
 		new_current = *(uint32_t *)xcb_get_property_value(current);
@@ -392,27 +482,28 @@ static bool ws_read_root(void) {
 	changed |= new_current != wsd.current;
 	wsd.current = new_current;
 
-	auto viewports = ws_get_prop(wsd.root, wsd.a_desktop_viewport, XCB_ATOM_CARDINAL,
-	                             WS_MAX_DESKTOPS * 2);
+	auto viewports = ws_prop_reply(requests.viewports);
 	unsigned n_viewports = 0;
 	if (viewports != NULL && viewports->format == 32) {
 		n_viewports = (unsigned)xcb_get_property_value_length(viewports) / 4;
-		n_viewports = n_viewports > WS_MAX_DESKTOPS * 2 ? WS_MAX_DESKTOPS * 2 : n_viewports;
+		n_viewports =
+		    n_viewports > WS_MAX_DESKTOPS * 2 ? WS_MAX_DESKTOPS * 2 : n_viewports;
 	}
 	if (n_viewports != wsd.n_viewports ||
-	    (n_viewports &&
-	     memcmp(wsd.viewports, xcb_get_property_value(viewports), n_viewports * 4) != 0)) {
+	    (n_viewports && memcmp(wsd.viewports, xcb_get_property_value(viewports),
+	                           n_viewports * 4) != 0)) {
 		changed = true;
 		if (n_viewports) {
-			memcpy(wsd.viewports, xcb_get_property_value(viewports), n_viewports * 4);
+			memcpy(wsd.viewports, xcb_get_property_value(viewports),
+			       n_viewports * 4);
 		}
 		wsd.n_viewports = n_viewports;
 	}
 	free(viewports);
 
-	// The names are a list of strings, each one ending with a NUL. We add one more NUL in
-	// case the last one doesn't have it.
-	auto names = ws_get_prop(wsd.root, wsd.a_desktop_names, wsd.a_utf8_string, UINT32_MAX / 4);
+	// The names are a list of strings, each one ending with a NUL. We add one more
+	// NUL in case the last one doesn't have it.
+	auto names = ws_prop_reply(requests.names);
 	size_t len = names ? (size_t)xcb_get_property_value_length(names) : 0;
 	char *buf = calloc(len + 1, 1);
 	if (buf == NULL) {
@@ -437,12 +528,18 @@ static bool ws_read_root(void) {
 		start += strlen(&buf[start]) + 1;
 	}
 
-	auto monitors = xcb_randr_get_monitors_reply(
-	    wsd.c, xcb_randr_get_monitors(wsd.c, wsd.root, 1), NULL);
+	xcb_get_geometry_reply_t *screen = ws_reply(requests.screen.sequence);
+	if (screen != NULL) {
+		wsd.screen = (struct ws_rect){.x2 = screen->width, .y2 = screen->height};
+		free(screen);
+	}
+
+	xcb_randr_get_monitors_reply_t *monitors = ws_reply(requests.monitors.sequence);
 	wsd.n_monitors = 0;
 	if (monitors != NULL) {
 		auto it = xcb_randr_get_monitors_monitors_iterator(monitors);
-		for (; it.rem && wsd.n_monitors < WS_MAX_MONITORS; xcb_randr_monitor_info_next(&it)) {
+		for (; it.rem && wsd.n_monitors < WS_MAX_MONITORS;
+		     xcb_randr_monitor_info_next(&it)) {
 			wsd.monitors[wsd.n_monitors++] = (struct ws_rect){
 			    .x1 = it.data->x,
 			    .y1 = it.data->y,
@@ -453,6 +550,11 @@ static bool ws_read_root(void) {
 		free(monitors);
 	}
 	return changed;
+}
+
+/// Read the root window properties and the monitors, in one round trip.
+static bool ws_read_root(void) {
+	return ws_read_root_reply(ws_read_root_request());
 }
 
 /// Desktop of a top-level window, or of the client window in it when the window manager
@@ -499,10 +601,10 @@ static void ws_seed_from_windows(void) {
 	free(tree);
 }
 
-/// Read the root window again, and record a switch if the monitor of the current desktop
-/// now shows another workspace.
-static void ws_refresh(void) {
-	bool root_changed = ws_read_root();
+/// Take the root window replies, and record a switch if the monitor of the current
+/// desktop now shows another workspace.
+static void ws_refresh(struct ws_root_requests requests) {
+	bool root_changed = ws_read_root_reply(requests);
 	if (wsd.current < 0 || wsd.current >= wsd.n_names) {
 		return;
 	}
@@ -539,11 +641,11 @@ static int ws_direction_for_show(xcb_window_t w, unsigned desktop, const char **
 		return 0;
 	}
 
-	// A window manager only shows windows of visible workspaces, so this is a switch the
-	// root window didn't tell us about. Either the root window is behind (some window
-	// managers map the new windows first), and this switch comes after the last one we
-	// know. Or the root window is ahead (when switching fast, we may read it after the
-	// next switch is done), and this switch came before it.
+	// A window manager only shows windows of visible workspaces, so this is a switch
+	// the root window didn't tell us about. Either the root window is behind (some
+	// window managers map the new windows first), and this switch comes after the
+	// last one we know. Or the root window is ahead (when switching fast, we may read
+	// it after the next switch is done), and this switch came before it.
 	auto shown = ws_shown(m);
 	k = (int)m->n_visits;
 	if (m->n_visits >= 2 && shown->from_root && ws_switch_is_recent(shown)) {
@@ -578,9 +680,10 @@ static int ws_direction_for_hide(unsigned desktop, const char **reason) {
 	return 0;
 }
 
-/// The monitor that fully contains window `w`, or the whole screen.
-static struct ws_rect ws_window_monitor(xcb_window_t w) {
-	auto g = xcb_get_geometry_reply(wsd.c, xcb_get_geometry(wsd.c, w), NULL);
+/// The monitor that fully contains the window whose geometry was asked for, or the
+/// whole screen.
+static struct ws_rect ws_window_monitor(xcb_get_geometry_cookie_t cookie) {
+	xcb_get_geometry_reply_t *g = ws_reply(cookie.sequence);
 	if (g == NULL) {
 		return wsd.screen;
 	}
@@ -615,40 +718,63 @@ static char *ws_window_name(xcb_window_t w) {
 	return ret;
 }
 
-/// Work out all our variables for a window that starts an animation.
+/// Work out all our variables for a window that starts an animation. Every request goes
+/// out before we wait for any reply, so a start costs one round trip to the X server.
 static void ws_compute(const struct picom_animation_start *start, double *values) {
-	values[0] = 0;
-	values[1] = wsd.screen.x1;
-	values[2] = wsd.screen.y1;
-	values[3] = wsd.screen.x2 - wsd.screen.x1;
-	values[4] = wsd.screen.y2 - wsd.screen.y1;
-	if (wsd.c == NULL) {
-		return;
-	}
-	bool show = strcmp(start->trigger, "open") == 0 || strcmp(start->trigger, "show") == 0;
+	auto now = ws_now_us();
+	wsd.n_waits = 0;
+	bool show =
+	    strcmp(start->trigger, "open") == 0 || strcmp(start->trigger, "show") == 0;
 	bool hide = strcmp(start->trigger, "hide") == 0;
-	// Only shows and hides can be part of a workspace switch, so only they read X.
-	if ((show || hide) && start->frame != wsd.frame) {
-		wsd.frame = start->frame;
-		wsd.frame_time_us = ws_now_us();
-		ws_refresh();
-	}
+	// A window that closes is gone (destroyed, or reparented away). There is nothing
+	// to ask about it.
+	bool gone = strcmp(start->trigger, "close") == 0;
 	xcb_window_t client = start->client != XCB_NONE ? start->client : start->window;
+
+	// The root window is read again on the first call in each frame, and the windows
+	// that start in the same frame share that. Only shows and hides can be part of a
+	// workspace switch. The window's own geometry is asked for at the same time, so
+	// that a window without a single workspace costs no second round trip.
+	bool new_frame = start->frame != wsd.frame;
+	struct ws_root_requests root = {0};
+	xcb_get_property_cookie_t desktop_request = {0};
+	xcb_get_geometry_cookie_t geometry_request = {0};
+	if (new_frame) {
+		root = ws_read_root_request();
+	}
+	if (show || hide) {
+		desktop_request = ws_window_desktop_request(client);
+	}
+	if (!gone) {
+		geometry_request = xcb_get_geometry(wsd.c, start->window);
+	}
+
+	if (new_frame) {
+		wsd.frame = start->frame;
+		wsd.frame_time_us = now;
+		ws_refresh(root);
+	}
 	const char *reason = "window is not on one workspace";
 	int direction = 0;
 	int monitor = -1;
 	if (show || hide) {
-		auto desktop = ws_window_desktop(client);
+		auto desktop = ws_window_desktop_reply(desktop_request);
 		if (desktop >= 0) {
 			monitor = ws_desktop_monitor((unsigned)desktop);
-			direction = show ? ws_direction_for_show(client, (unsigned)desktop, &reason)
-			                 : ws_direction_for_hide((unsigned)desktop, &reason);
+			direction =
+			    show ? ws_direction_for_show(client, (unsigned)desktop, &reason)
+			         : ws_direction_for_hide((unsigned)desktop, &reason);
 		}
 	} else {
 		reason = "not a show or hide";
 	}
-
-	auto rect = monitor >= 0 ? wsd.monitors[monitor] : ws_window_monitor(start->window);
+	auto rect = wsd.screen;
+	if (monitor >= 0) {
+		rect = wsd.monitors[monitor];
+		xcb_discard_reply(wsd.c, geometry_request.sequence);
+	} else if (!gone) {
+		rect = ws_window_monitor(geometry_request);
+	}
 	values[0] = direction;
 	values[1] = rect.x1;
 	values[2] = rect.y1;
@@ -656,16 +782,27 @@ static void ws_compute(const struct picom_animation_start *start, double *values
 	values[4] = rect.y2 - rect.y1;
 
 	if (wsd.log != NULL) {
+		// Measured before the name lookup, which only the log needs.
+		auto took = ws_now_us() - now;
+		auto waits = wsd.n_waits;
 		char *name = ws_window_name(client);
-		ws_log("%s of window %#010x (%s): workspace-direction = %d (%s), workspace "
-		       "monitor %d",
-		       start->trigger, start->window, name, direction, reason, monitor);
+		ws_log("%s of window %#010x (%s): workspace-direction = %d (%s), "
+		       "workspace monitor %d, %llu us, %u waits for X",
+		       start->trigger, start->window, name, direction, reason, monitor,
+		       (unsigned long long)took, waits);
 		free(name);
+	}
+
+	// Drop the events the server sends to every client (MappingNotify). Nothing reads
+	// them otherwise, and they would pile up in the connection's queue.
+	xcb_generic_event_t *event;
+	while ((event = xcb_poll_for_queued_event(wsd.c)) != NULL) {
+		free(event);
 	}
 }
 
-/// picom asks for each variable on its own, `user_data` is its index. We work them all out
-/// on the first call for a window in a frame, and answer the other calls from that.
+/// picom asks for each variable on its own, `user_data` is its index. We work them all
+/// out on the first call for a window in a frame, and answer the other calls from that.
 static double ws_provide(const struct picom_animation_start *start, void *user_data) {
 	static struct {
 		uint64_t frame;
@@ -687,20 +824,16 @@ __attribute__((constructor)) static void ws_init(void) {
 	}
 	auto api = picom_api_get_interfaces(0, 2, "ws-direction");
 	if (api == NULL) {
-		fprintf(stderr, "ws-direction: picom is too old, it needs plugin API 0.2\n");
+		fprintf(stderr, "ws-direction: picom is too old, "
+		                "it needs plugin API 0.2\n");
 		return;
-	}
-	for (uintptr_t i = 0; i < WS_N_VARIABLES; i++) {
-		if (!api->add_script_variable(ws_variable_names[i], ws_provide, (void *)i)) {
-			fprintf(stderr, "ws-direction: could not add %s\n", ws_variable_names[i]);
-			return;
-		}
 	}
 
 	int screen_num = 0;
 	wsd.c = xcb_connect(NULL, &screen_num);
 	if (xcb_connection_has_error(wsd.c)) {
-		fprintf(stderr, "ws-direction: cannot connect to the X server\n");
+		fprintf(stderr, "ws-direction: cannot connect to the X server, "
+		                "not adding the workspace-* variables\n");
 		xcb_disconnect(wsd.c);
 		wsd.c = NULL;
 		return;
@@ -710,10 +843,6 @@ __attribute__((constructor)) static void ws_init(void) {
 		xcb_screen_next(&it);
 	}
 	wsd.root = it.data->root;
-	wsd.screen = (struct ws_rect){
-	    .x2 = it.data->width_in_pixels,
-	    .y2 = it.data->height_in_pixels,
-	};
 	wsd.a_current_desktop = ws_atom("_NET_CURRENT_DESKTOP");
 	wsd.a_desktop_names = ws_atom("_NET_DESKTOP_NAMES");
 	wsd.a_desktop_viewport = ws_atom("_NET_DESKTOP_VIEWPORT");
@@ -727,5 +856,15 @@ __attribute__((constructor)) static void ws_init(void) {
 	ws_seed_from_windows();
 	if (wsd.current >= 0 && wsd.current < wsd.n_names) {
 		ws_get_monitor((unsigned)wsd.current, XCB_NONE);
+	}
+
+	// Only now: a variable must never exist without the connection that gives it a
+	// value.
+	for (uintptr_t i = 0; i < WS_N_VARIABLES; i++) {
+		if (!api->add_animation_variable(ws_variable_names[i], ws_provide, (void *)i)) {
+			fprintf(stderr, "ws-direction: could not add %s\n",
+			        ws_variable_names[i]);
+			return;
+		}
 	}
 }

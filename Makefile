@@ -1,10 +1,10 @@
 # picom plugin: workspace slide direction and workspace monitor for animation scripts.
-# Needs picom's plugin API 0.2 (add_script_variable). Until a picom release has it, point
-# PICOM_API_CFLAGS at a picom tree that does, e.g. the plugin-hook-small worktree (the
-# default here).
-PICOM_API_CFLAGS ?= -I../picom/worktrees/plugin-hook-small/include
+# Needs picom's plugin API 0.2 (add_animation_variable). If the installed picom doesn't
+# have it, point PICOM_API_CFLAGS at a picom tree that does, e.g.
+#   make PICOM_API_CFLAGS=-I/path/to/picom/include
+PICOM_API_CFLAGS ?=
 CFLAGS ?= -O2 -g
-CFLAGS += -std=gnu23 -Wall -Wextra -fPIC -fvisibility=hidden $(PICOM_API_CFLAGS) \
+override CFLAGS += -std=gnu23 -Wall -Wextra -fPIC -fvisibility=hidden $(PICOM_API_CFLAGS) \
 	$(shell pkg-config --cflags xcb xcb-randr)
 LDLIBS = $(shell pkg-config --libs xcb xcb-randr)
 
