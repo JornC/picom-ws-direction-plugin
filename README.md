@@ -6,6 +6,12 @@ workspace switch went, and which monitor a window's workspace is on. With it a `
 knows nothing about workspaces: the plugin reads the window manager's EWMH properties and
 hands the scripts five numbers.
 
+![Workspace switches under i3 on two monitors: vertical slides on the landscape one,
+horizontal slides on the portrait one](docs/demo.gif)
+
+Recorded on Xvfb with i3 and `examples/picom-wsdir.conf`, at a quarter of the real size;
+`docs/record-demo.sh` makes it.
+
 It needs a picom with the animation variable hook (plugin API 0.2, yshui/picom pull
 request: link to follow). An older picom logs `ws-direction: picom is too old` and runs
 without the variables.
