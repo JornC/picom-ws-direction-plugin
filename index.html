@@ -262,7 +262,7 @@ footer {
 						<source src="cascade.mp4" type="video/mp4">
 					</video>
 					<h3 class="mono">cascade</h3>
-					<p>The old workspace slides out in one piece; the new windows follow one after another and land together.</p>
+					<p>The old workspace slides out in one piece; the new windows follow one after another and land together. Recorded with <code>use-damage = false</code>; see Limits.</p>
 				</figure>
 				<figure>
 					<video class="screen" muted loop playsinline preload="none" poster="warp.png" width="1130" height="480" aria-label="The warp style">
@@ -342,6 +342,7 @@ rules = ({
 			<h2>Limits</h2>
 			<ul>
 				<li>Tested with i3.</li>
+				<li>cascade can flicker: during a switch, a window that is already moving in is sometimes not drawn for a frame or two. That is a bug in picom's damage tracking, not in the style; with <code>use-damage = false</code> it doesn't happen.</li>
 				<li>A switch made while picom isn't compositing (a fullscreen window with <code>unredir-if-possible</code>) can be missed. The next slide may then go the wrong way.</li>
 				<li>Each animation start waits for a reply from the X server: about 20 µs on a quiet server, a few milliseconds when it's busy.</li>
 			</ul>
