@@ -6,7 +6,9 @@
 # picom uses the xrender backend, because glx on Xvfb doesn't redraw the bar.
 # Usage: make && docs/record-demo.sh OUTDIR [STYLE]   (slide, zoom, fold or cascade;
 # default slide)
-# Environment: PICOM (default: picom on the PATH), DEMO_DISPLAY (default :205).
+# Environment: PICOM (default: picom on the PATH), DEMO_DISPLAY (default :205),
+# DEMO_LENGTH (seconds per switch instead of the style's var-length; it also makes the
+# demo two switches, forward and back).
 set -u
 OUT=$1
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -14,6 +16,7 @@ ROOT=$(cd "$HERE/.." && pwd)
 PICOM=${PICOM:-$(command -v picom)}
 PLUGIN=$ROOT/build/ws-direction.so
 STYLE_FILE=$ROOT/styles/${2:-slide}.conf
+LENGTH=${DEMO_LENGTH:-}
 DISP=${DEMO_DISPLAY:-:205}
 SOCK=${XDG_RUNTIME_DIR:-/tmp}/ws-direction-demo.sock
 W=1130 H=480
@@ -82,15 +85,18 @@ for _ in $(seq 50); do i3-msg -s "$SOCK" -t get_version >/dev/null 2>&1 && break
 win() {
 	bg "$OUT/xterm-$1.log" env L="$3" F="$4" N="$5" xterm -name "$1" -bg "$2" -fg '#eef1f6' \
 		-fa 'DejaVu Sans Mono' -fs 6 +sb -b 8 -bw 0 -e bash -c '
-			draw() {
-				clear
-				printf "\033[?25l\033[1m%s\033[0m\n\n" "$L"
-				tail -n +"$N" "$F" | expand -t 4 | cut -c1-$(($(tput cols) - 1)) |
-					head -n $(($(tput lines) - 3))
-			}
-			trap draw WINCH
-			draw
-			while :; do sleep 0.2; done'
+			last=
+			while :; do
+				size=$(stty size)
+				if [[ $size != "$last" ]]; then
+					last=$size
+					clear
+					printf "\033[?25l\033[1m%s\033[0m\n\n" "$L"
+					tail -n +"$N" "$F" | expand -t 4 | cut -c1-$((${size#* } - 1)) |
+						head -n $((${size% *} - 3))
+				fi
+				sleep 0.2
+			done'
 	sleep 0.3
 }
 # 1:IDE: three columns.
@@ -129,6 +135,8 @@ i3cmd 'workspace 4:Term'
 i3cmd 'workspace 1:IDE'
 sleep 0.5
 
+SET_LENGTH=()
+[[ -z $LENGTH ]] || SET_LENGTH=(-e "s/var-length = [0-9.]*;/var-length = $LENGTH;/")
 # The i3 bar is 20 px high; crop below it, so windows don't cover it.
 {
 	echo "plugins = \"$PLUGIN\";"
@@ -137,7 +145,8 @@ sleep 0.5
 	echo 'rules = ({'
 	echo "  match = \"!override_redirect && window_type = 'normal'\";"
 	sed -e 's/crop-y = "workspace-monitor-y";/crop-y = "workspace-monitor-y + 20";/' \
-		-e 's/crop-height = "workspace-monitor-height";/crop-height = "workspace-monitor-height - 20";/' "$STYLE_FILE"
+		-e 's/crop-height = "workspace-monitor-height";/crop-height = "workspace-monitor-height - 20";/' \
+		"${SET_LENGTH[@]}" "$STYLE_FILE"
 	echo '});'
 } >"$OUT/picom.conf"
 bg "$OUT/picom.out" "$PICOM" --config "$OUT/picom.conf" --log-file "$OUT/picom.log"
@@ -149,14 +158,17 @@ bg "$OUT/ffmpeg.log" ffmpeg -y -f x11grab -draw_mouse 0 -framerate 50 -video_siz
 FF=$LAST
 sleep 1.2
 
-step() { i3cmd "workspace $1"; sleep 1.1; }
-step 2:Web
-step 3:Chat
-step 1:IDE
-step 5:Music
-step 6:Notes
-step 4:Term
-step 2:Web
+if [[ -n $LENGTH ]]; then
+	STEPS=(2:Web 1:IDE)
+	PAUSE=$(awk -v l="$LENGTH" 'BEGIN { print l + 0.8 }')
+else
+	STEPS=(2:Web 3:Chat 1:IDE 5:Music 6:Notes 4:Term 2:Web)
+	PAUSE=1.1
+fi
+for ws in "${STEPS[@]}"; do
+	i3cmd "workspace $ws"
+	sleep "$PAUSE"
+done
 sleep 0.4
 
 kill -INT "$FF"

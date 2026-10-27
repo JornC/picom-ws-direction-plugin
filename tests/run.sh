@@ -433,7 +433,7 @@ done
 # taken about 1.5 s into a switch shows both workspaces, 25% of the way.
 # DPT: 1 is red, 2 is blue. HDT: 3 is green, 5 is yellow.
 stop_picom
-sed -E -e 's/cubic-bezier\([^)]*\)/linear/' -e 's/"[0-9.]+ \* var-slide/"6 * var-slide/' \
+sed -E -e 's/cubic-bezier\([^)]*\)/linear/' -e 's/var-length = [0-9.]+;/var-length = 6;/' \
 	-e 's/\+ [0-9.]+ \* \(1 - var-slide\)/+ 3 * (1 - var-slide)/' \
 	"$CONFIG" >"$OUT/slow.conf"
 start_picom "$OUT/slow.conf" picom-slow

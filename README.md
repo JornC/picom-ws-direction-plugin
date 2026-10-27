@@ -42,6 +42,8 @@ Each style is one file in `styles/`. To switch, change the name in the `@include
 picom reloads by itself when you save `picom.conf`. Workspaces move along the short side
 of each monitor: up and down on a landscape monitor, sideways on a portrait one. When an
 animation is not part of a workspace switch, every style gives the window a short fade.
+Each style has a `var-length` near the top, in seconds: make it larger for a slower
+switch.
 
 ![All six styles at once, going through the same workspace switches](docs/styles.gif)
 

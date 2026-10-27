@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
-# Records every style with record-demo.sh and makes docs/slide.gif and docs/styles.gif:
-# the slide style on its own, and all styles at once in a 3x2 grid, each with its name.
+# Records every style with record-demo.sh and makes the GIFs in docs/: slide.gif, the
+# slide style on its own; styles.gif, all styles at once in a 3x2 grid, each with its
+# name; and styles-slow.gif, the same grid slowed down to 1.2 s per switch, going to the
+# next workspace and back.
 # Usage: make && docs/record-styles.sh WORKDIR
 set -eu
 WORK=$1
 HERE=$(cd "$(dirname "$0")" && pwd)
 STYLES=(slide push wipe fold cascade warp)
 FONT=$(fc-match -f '%{file}' 'DejaVu Sans Mono:bold')
+
+# grid DIR GIF: the recordings in DIR/<style>/raw.mkv, side by side, as GIF.
+grid() {
+	local inputs=() tiles= names= i
+	for i in "${!STYLES[@]}"; do
+		inputs+=(-i "$1/${STYLES[i]}/raw.mkv")
+		tiles+="[$i]scale=376:160:flags=lanczos,drawtext=fontfile=$FONT:text=${STYLES[i]}:x=10:y=10:fontsize=17:fontcolor=white[v$i];"
+		names+="[v$i]"
+	done
+	ffmpeg -v error -y "${inputs[@]}" -filter_complex "$tiles${names}xstack=inputs=6:layout=0_0|w0_0|w0+w1_0|0_h0|w0_h0|w0+w1_h0:shortest=1:fill=black,fps=25,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" \
+		-loop 0 "$2"
+}
+
 for s in "${STYLES[@]}"; do
-	"$HERE/record-demo.sh" "$WORK/$s" "$s"
+	"$HERE/record-demo.sh" "$WORK/normal/$s" "$s"
+	DEMO_LENGTH=1.2 "$HERE/record-demo.sh" "$WORK/slow/$s" "$s"
 done
-cp "$WORK/slide/demo.gif" "$HERE/slide.gif"
-inputs=() tiles= names=
-for i in "${!STYLES[@]}"; do
-	inputs+=(-i "$WORK/${STYLES[i]}/raw.mkv")
-	tiles+="[$i]scale=376:160:flags=lanczos,drawtext=fontfile=$FONT:text=${STYLES[i]}:x=10:y=10:fontsize=17:fontcolor=white[v$i];"
-	names+="[v$i]"
-done
-ffmpeg -v error -y "${inputs[@]}" -filter_complex "$tiles${names}xstack=inputs=6:layout=0_0|w0_0|w0+w1_0|0_h0|w0_h0|w0+w1_h0:shortest=1:fill=black,fps=25,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" \
-	-loop 0 "$HERE/styles.gif"
-echo "wrote $HERE/slide.gif and $HERE/styles.gif"
+cp "$WORK/normal/slide/demo.gif" "$HERE/slide.gif"
+grid "$WORK/normal" "$HERE/styles.gif"
+grid "$WORK/slow" "$HERE/styles-slow.gif"
+echo "wrote slide.gif, styles.gif and styles-slow.gif in $HERE"
