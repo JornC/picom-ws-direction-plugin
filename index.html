@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ws-direction</title>
+<meta name="description" content="A picom plugin that tells animation scripts which way an i3 workspace switch went, and which monitor the workspace is on.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,MONO@300..900,0..1&display=swap">
+<style>
+:root {
+	--paper: #eef0f3;
+	--ink: #1c2230;
+	--muted: #586172;
+	--line: #d3d8e0;
+	--code-bg: #e2e6ec;
+	--bar: #15171c;
+	--bar-text: #8a909c;
+	--focus: #3d7bd9;
+	--link: #2a62b8;
+	color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--paper: #1d222b;
+		--ink: #e4e8ee;
+		--muted: #9aa3b2;
+		--line: #343b47;
+		--code-bg: #262c37;
+		--link: #7fa9ec;
+		color-scheme: dark;
+	}
+}
+@media (prefers-reduced-motion: no-preference) {
+	html { scroll-behavior: smooth; }
+}
+
+* { box-sizing: border-box; }
+body {
+	margin: 0;
+	background: var(--paper);
+	color: var(--ink);
+	font-family: "Recursive", system-ui, sans-serif;
+	font-variation-settings: "MONO" 0;
+	font-size: 1.0625rem;
+	line-height: 1.6;
+}
+a { color: var(--link); text-underline-offset: 0.15em; }
+a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+code, pre, .mono {
+	font-family: "Recursive", ui-monospace, "DejaVu Sans Mono", monospace;
+	font-variation-settings: "MONO" 1;
+}
+code { font-size: 0.92em; }
+:not(pre) > code { white-space: nowrap; }
+
+/* The navigation is an i3bar: sections are workspaces, the one in view is focused. */
+.bar {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	display: flex;
+	align-items: stretch;
+	justify-content: space-between;
+	gap: 1rem;
+	background: var(--bar);
+	font-size: 0.8125rem;
+	line-height: 1;
+}
+.bar ol {
+	display: flex;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+.bar ol a {
+	display: block;
+	padding: 0.5rem 0.65rem;
+	color: var(--bar-text);
+	text-decoration: none;
+	white-space: nowrap;
+}
+.bar ol a:hover { color: #ffffff; }
+.bar ol a[aria-current] { background: var(--focus); color: #ffffff; }
+.bar ol a:focus-visible { outline-offset: -2px; outline-color: #ffffff; border-radius: 0; }
+.bar .status {
+	display: flex;
+	align-items: center;
+	padding: 0 0.75rem;
+	color: var(--bar-text);
+	white-space: nowrap;
+}
+.bar .status:hover { color: #ffffff; }
+@media (max-width: 34rem) {
+	.bar .status { display: none; }
+}
+
+.page {
+	max-width: 71rem;
+	margin: 0 auto;
+	padding: 0 1rem 4rem;
+}
+.text { max-width: 40rem; }
+
+header { padding: 3.5rem 0 2rem; }
+h1 {
+	margin: 0 0 0.75rem;
+	font-size: clamp(2.5rem, 4vw + 1.25rem, 4.25rem);
+	font-weight: 800;
+	line-height: 1;
+	letter-spacing: -0.03em;
+}
+.lede { margin: 0; font-size: 1.25rem; line-height: 1.5; color: var(--ink); }
+
+figure { margin: 0; }
+.screen {
+	display: block;
+	width: 100%;
+	height: auto;
+	aspect-ratio: 1130 / 480;
+	background: #000000;
+	border-radius: 6px;
+}
+figcaption { margin-top: 0.75rem; color: var(--muted); font-size: 0.9375rem; }
+
+section { padding-top: 3rem; }
+main [id] { scroll-margin-top: 2rem; }
+h2 {
+	margin: 0 0 0.75rem;
+	font-size: 1.5rem;
+	font-weight: 700;
+	line-height: 1.25;
+	letter-spacing: -0.01em;
+}
+p { margin: 0 0 1rem; }
+.note { color: var(--muted); font-size: 0.9375rem; }
+
+/* Variables next to the config that reads them, on wide screens. */
+.pair { display: grid; column-gap: 3rem; }
+.pair > section { max-width: 40rem; }
+@media (min-width: 64rem) {
+	.pair { grid-template-columns: minmax(0, 34rem) minmax(0, 1fr); align-items: start; }
+	.pair > section { max-width: none; }
+}
+
+dl { margin: 1.25rem 0; }
+dt { font-weight: 600; }
+dt code { font-size: 0.95rem; }
+dd { margin: 0.25rem 0 1.25rem; }
+
+pre {
+	margin: 0 0 1rem;
+	padding: 1rem 1.25rem;
+	background: var(--code-bg);
+	border-radius: 6px;
+	overflow-x: auto;
+	font-size: 0.875rem;
+	line-height: 1.55;
+}
+.step-list { padding-left: 1.25rem; }
+.step-list li { margin-bottom: 1rem; padding-left: 0.25rem; }
+.step-list pre { margin-top: 0.5rem; }
+ul { padding-left: 1.25rem; }
+ul li { margin-bottom: 0.5rem; }
+
+footer {
+	margin-top: 4rem;
+	padding-top: 1.25rem;
+	border-top: 1px solid var(--line);
+	color: var(--muted);
+	font-size: 0.9375rem;
+}
+</style>
+</head>
+<body>
+<nav class="bar" aria-label="Sections">
+	<ol>
+		<li><a href="#demo" aria-current="location">1:demo</a></li>
+		<li><a href="#variables">2:variables</a></li>
+		<li><a href="#install">3:install</a></li>
+		<li><a href="#how">4:how it works</a></li>
+		<li><a href="#limits">5:limits</a></li>
+	</ol>
+	<a class="status mono" href="https://github.com/JornC/picom-ws-direction">JornC/picom-ws-direction</a>
+</nav>
+
+<div class="page">
+	<header class="text">
+		<h1 class="mono">ws-direction</h1>
+		<p class="lede">A <a href="https://github.com/yshui/picom">picom</a> plugin that tells your animation scripts which way an i3 workspace switch went, and which monitor the workspace is on. Windows slide the right way, and stay on their own monitor.</p>
+	</header>
+
+	<main>
+		<section id="demo" aria-label="Demo">
+			<figure>
+				<video class="screen" autoplay muted loop playsinline poster="poster.png" width="1130" height="480" aria-describedby="demo-caption">
+					<source src="demo.webm" type="video/webm">
+					<source src="demo.mp4" type="video/mp4">
+				</video>
+				<figcaption id="demo-caption" class="text">Two monitors under i3, recorded at a quarter of their real size. Going to a higher workspace brings it in from below on the landscape monitor, and from the right on the portrait one. Going back reverses the slide.</figcaption>
+			</figure>
+		</section>
+
+		<div class="pair" id="variables">
+		<section>
+			<h2>What your scripts get</h2>
+			<p>The plugin adds five variables, which scripts read like <code>window-width</code>. picom asks the plugin for their values when an animation starts, and only for scripts that use them.</p>
+			<dl>
+				<dt><code>workspace-direction</code></dt>
+				<dd>1 if the new workspace comes after the old one, -1 if it comes before, and 0 if the animation wasn't caused by a workspace switch on that monitor: a new window, the scratchpad, fullscreen, or a window moved to another workspace.</dd>
+				<dt><code>workspace-monitor-x</code>, <code>-y</code>, <code>-width</code>, <code>-height</code></dt>
+				<dd>The monitor that shows the window's workspace. Crop a slide to it, so it doesn't spill onto your other monitor.</dd>
+			</dl>
+			<p class="note">Workspaces are ordered as in <code>_NET_DESKTOP_NAMES</code>. Under i3 that means by workspace number, with unnumbered names last.</p>
+		</section>
+
+		<section id="config">
+			<h2>A slide in your config</h2>
+			<p>New workspaces slide in from below, old ones slide out the top, and both are cropped to their monitor:</p>
+<pre><code>animations = ({
+  triggers = ["show", "open"];
+  offset-y = {
+    duration = 0.25;
+    start = "workspace-direction * workspace-monitor-height";
+    end = 0;
+  };
+  crop-x = "workspace-monitor-x";
+  crop-y = "workspace-monitor-y";
+  crop-width = "workspace-monitor-width";
+  crop-height = "workspace-monitor-height";
+}, {
+  triggers = ["hide"];
+  offset-y = {
+    duration = 0.25;
+    start = 0;
+    end = "0 - workspace-direction * workspace-monitor-height";
+  };
+  crop-x = "workspace-monitor-x";
+  crop-y = "workspace-monitor-y";
+  crop-width = "workspace-monitor-width";
+  crop-height = "workspace-monitor-height";
+});</code></pre>
+			<p>The full example, <a href="https://github.com/JornC/picom-ws-direction/blob/main/examples/picom-wsdir.conf"><code>examples/picom-wsdir.conf</code></a>, also fades windows that aren't part of a switch, and slides sideways on a second monitor. It's the config in the demo.</p>
+		</section>
+		</div>
+
+		<section id="install" class="text">
+			<h2>Install</h2>
+			<ol class="step-list">
+				<li>Use a picom with the animation variable hook (plugin API 0.2). It's proposed upstream in <a href="PR2_URL">yshui/picom PR2_NUMBER</a>. Until a picom release has it, build picom from the <a href="https://github.com/JornC/picom/tree/hook-v2"><code>hook-v2</code> branch</a>.</li>
+				<li>Build the plugin:
+<pre><code>make</code></pre>
+					To build against a picom source tree instead of the installed headers:
+<pre><code>make PICOM_API_CFLAGS=-I/path/to/picom/include</code></pre></li>
+				<li>Load it in <code>picom.conf</code>, and add animations that read the variables:
+<pre><code>plugins = "/path/to/build/ws-direction.so";</code></pre></li>
+			</ol>
+			<p class="note">An older picom logs <code>ws-direction: picom is too old</code> and runs without the variables.</p>
+		</section>
+
+		<section id="how" class="text">
+			<h2>How it works</h2>
+			<p>picom knows when a window shows or hides, but not why. The plugin fills that gap from outside picom. It reads the window manager's EWMH properties (<code>_NET_CURRENT_DESKTOP</code>, <code>_NET_DESKTOP_NAMES</code> and <code>_NET_DESKTOP_VIEWPORT</code> on the root window, <code>_NET_WM_DESKTOP</code> on each window) and the monitors from RandR, and it remembers the recent workspaces of every monitor.</p>
+			<p>Window managers don't follow a fixed order when they update these properties and show or hide windows, so the plugin doesn't act on events. When a window starts an animation that reads one of its variables, picom asks the plugin, and the plugin matches the window to a recent switch on its monitor. It reads the root window once per frame, however many windows start animating in it.</p>
+		</section>
+
+		<section id="limits" class="text">
+			<h2>Limits</h2>
+			<ul>
+				<li>Tested with i3.</li>
+				<li>A switch made while picom isn't compositing (a fullscreen window with <code>unredir-if-possible</code>) can be missed. The next slide may then go the wrong way.</li>
+				<li>Each animation start waits for a reply from the X server: about 20 µs on a quiet server, a few milliseconds when it's busy.</li>
+			</ul>
+		</section>
+	</main>
+
+	<footer class="text">
+		<p>ws-direction is licensed under the MPL-2.0. The source, the tests and the script that records the demo are on <a href="https://github.com/JornC/picom-ws-direction">GitHub</a>.</p>
+	</footer>
+</div>
+
+<script>
+// The focused workspace is the last section whose top has passed 35% of the window.
+const links = [...document.querySelectorAll(".bar ol a")];
+const targets = links.map((a) => document.getElementById(a.hash.slice(1)));
+function focusWorkspace() {
+	const line = innerHeight * 0.35;
+	let current = 0;
+	targets.forEach((t, i) => {
+		if (t.getBoundingClientRect().top <= line) current = i;
+	});
+	if (innerHeight + scrollY >= document.documentElement.scrollHeight - 2) current = targets.length - 1;
+	links.forEach((a, i) => {
+		if (i === current) a.setAttribute("aria-current", "location");
+		else a.removeAttribute("aria-current");
+	});
+}
+addEventListener("scroll", () => requestAnimationFrame(focusWorkspace), { passive: true });
+focusWorkspace();
+
+const video = document.querySelector("video");
+if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+	video.removeAttribute("autoplay");
+	video.pause();
+	video.controls = true;
+}
+</script>
+</body>
+</html>
