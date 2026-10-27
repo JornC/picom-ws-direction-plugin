@@ -8,7 +8,8 @@
 # warp; default slide)
 # Environment: PICOM (default: picom on the PATH), DEMO_DISPLAY (default :205),
 # DEMO_LENGTH (seconds per switch instead of the style's var-length; it also makes the
-# demo two switches, forward and back).
+# demo two switches, forward and back), DEMO_USE_DAMAGE (set to false for
+# use-damage = false; default: picom's default).
 set -u
 OUT=$1
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -142,6 +143,7 @@ SET_LENGTH=()
 	echo "plugins = \"$PLUGIN\";"
 	echo 'backend = "xrender";'
 	echo 'unredir-if-possible = false;'
+	[[ ${DEMO_USE_DAMAGE:-} != false ]] || echo 'use-damage = false;'
 	echo 'rules = ({'
 	echo "  match = \"!override_redirect && window_type = 'normal'\";"
 	sed -e 's/crop-y = "workspace-monitor-y";/crop-y = "workspace-monitor-y + 20";/' \

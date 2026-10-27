@@ -23,8 +23,11 @@ grid() {
 }
 
 for s in "${STYLES[@]}"; do
-	"$HERE/record-demo.sh" "$WORK/normal/$s" "$s"
-	DEMO_LENGTH=1.2 "$HERE/record-demo.sh" "$WORK/slow/$s" "$s"
+	# A picom bug makes cascade flicker for a frame with use-damage on; see the README.
+	damage=
+	[[ $s != cascade ]] || damage=false
+	DEMO_USE_DAMAGE=$damage "$HERE/record-demo.sh" "$WORK/normal/$s" "$s"
+	DEMO_USE_DAMAGE=$damage DEMO_LENGTH=1.2 "$HERE/record-demo.sh" "$WORK/slow/$s" "$s"
 done
 cp "$WORK/normal/slide/demo.gif" "$HERE/slide.gif"
 grid "$WORK/normal" "$HERE/styles.gif"

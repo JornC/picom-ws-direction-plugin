@@ -61,7 +61,8 @@ switch.
   middle of the monitor.
 
 The GIFs are recorded on Xvfb with i3, at a quarter of a 3440x1440 + 1080x1920 layout,
-with the windows cropped below the i3 bar; `docs/record-styles.sh` makes them.
+with the windows cropped below the i3 bar, and cascade with `use-damage = false` (see
+Limits); `docs/record-styles.sh` makes them.
 
 The styles are plain picom animation scripts. To change one, copy it into your config
 instead of including it; each file explains how it works.
@@ -99,6 +100,9 @@ worked out in one go, and the root window is read once per picom update pass
 ## Limits
 
 - Tested with i3 only.
+- cascade can flicker: during a switch, a window that is already moving in is sometimes
+  not drawn for a frame or two. That is a bug in picom's damage tracking, not in the
+  style; with `use-damage = false` it doesn't happen.
 - A switch is only seen when a window starts an animation whose script reads the
   variables. A switch made while picom is unredirected (`unredir-if-possible`) may not be
   seen; the next switch is then judged against the last workspace the plugin saw.
