@@ -55,7 +55,8 @@ switch.
   workspace.
 - **fold**: the old workspace folds into one edge while the new one unfolds from the
   other, like a flat cube turning.
-- **cascade**: the slide, but the windows start one after another and land together.
+- **cascade**: the old workspace slides out in one piece; the new windows follow one after
+  another and land together.
 - **warp**: the old windows fly outward past you while the new ones come out of the
   middle of the monitor.
 
