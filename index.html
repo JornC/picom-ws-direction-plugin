@@ -3,8 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ws-direction</title>
+<title>ws-direction: picom workspace direction</title>
 <meta name="description" content="A picom plugin that tells animation scripts which way an i3 workspace switch went, and which monitor the workspace is on.">
+<meta property="og:title" content="ws-direction: picom workspace direction">
+<meta property="og:description" content="A picom plugin that tells animation scripts which way an i3 workspace switch went, and which monitor the workspace is on.">
+<meta property="og:image" content="https://jornc.github.io/picom-ws-direction-plugin/slide.png">
+<link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,MONO@300..900,0..1&display=swap">
@@ -114,6 +118,7 @@ h1 {
 	letter-spacing: -0.03em;
 }
 .lede { margin: 0; font-size: 1.25rem; line-height: 1.5; color: var(--ink); }
+header .note { margin: 0.75rem 0 0; }
 
 figure { margin: 0; }
 .screen {
@@ -206,6 +211,7 @@ footer {
 	<header class="text">
 		<h1 class="mono">ws-direction</h1>
 		<p class="lede">A <a href="https://github.com/yshui/picom">picom</a> plugin that tells your animation scripts which way an i3 workspace switch went, and which monitor the workspace is on. Windows slide the right way, and stay on their own monitor.</p>
+		<p class="note">It needs a picom with plugin API 0.2, which no release has yet; see <a href="#install">Install</a>.</p>
 	</header>
 
 	<main>
@@ -310,7 +316,7 @@ crop-height = "workspace-monitor-height";</code></pre>
 		<section id="install" class="text">
 			<h2>Install</h2>
 			<ol class="step-list">
-				<li>Use a picom with plugin API 0.2, which adds the animation variable hook. No picom release has it yet: build picom from the <a href="https://github.com/JornC/picom/tree/hook-v2"><code>hook-v2</code> branch</a>, which is picom's <code>next</code> branch with the hook added.</li>
+				<li>Use a picom with plugin API 0.2, which adds the animation variable hook. No picom release has it yet: build picom from the <a href="https://github.com/JornC/picom/tree/hook-v2"><code>hook-v2</code> branch</a>, which is based on picom's <code>next</code> branch, with the hook added.</li>
 				<li>Build the plugin and install it with its styles in <code>~/.config/picom</code>:
 <pre><code>make
 make install</code></pre>
@@ -329,7 +335,7 @@ rules = ({
 		<section id="how" class="text">
 			<h2>How it works</h2>
 			<p>picom knows when a window shows or hides, but not why. The plugin fills that gap from outside picom. It reads the window manager's EWMH properties (<code>_NET_CURRENT_DESKTOP</code>, <code>_NET_DESKTOP_NAMES</code> and <code>_NET_DESKTOP_VIEWPORT</code> on the root window, <code>_NET_WM_DESKTOP</code> on each window) and the monitors from RandR, and it remembers the recent workspaces of every monitor.</p>
-			<p>Window managers don't follow a fixed order when they update these properties and show or hide windows, so the plugin doesn't act on events. When a window starts an animation that reads one of its variables, picom asks the plugin, and the plugin matches the window to a recent switch on its monitor. It reads the root window once per frame, however many windows start animating in it.</p>
+			<p>Window managers don't follow a fixed order when they update these properties and show or hide windows, so the plugin doesn't act on events. When a window starts an animation that reads one of its variables, picom asks the plugin, and the plugin matches the window to a recent switch on its monitor. It reads the root window once per update pass, however many windows start animating in it.</p>
 		</section>
 
 		<section id="limits" class="text">
