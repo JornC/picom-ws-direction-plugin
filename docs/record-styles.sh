@@ -23,7 +23,8 @@ grid() {
 }
 
 for s in "${STYLES[@]}"; do
-	# A picom bug makes cascade flicker for a frame with use-damage on; see the README.
+	# A bug in picom's xrender backend makes cascade flicker for a frame with use-damage on;
+	# see the README.
 	damage=
 	[[ $s != cascade ]] || damage=false
 	DEMO_USE_DAMAGE=$damage "$HERE/record-demo.sh" "$WORK/normal/$s" "$s"

@@ -100,9 +100,10 @@ worked out in one go, and the root window is read once per picom update pass
 ## Limits
 
 - Tested with i3 only.
-- cascade can flicker: during a switch, a window that is already moving in is sometimes
-  not drawn for a frame or two. That is a bug in picom's damage tracking, not in the
-  style; with `use-damage = false` it doesn't happen.
+- With picom's xrender backend, cascade can flicker: during a switch, a window that is
+  already moving in is sometimes not drawn for a frame or two. That is a bug in the
+  xrender backend, not in the style; the glx backend doesn't have it, and with
+  `use-damage = false` it doesn't happen either.
 - A switch is only seen when a window starts an animation whose script reads the
   variables. A switch made while picom is unredirected (`unredir-if-possible`) may not be
   seen; the next switch is then judged against the last workspace the plugin saw.
