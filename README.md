@@ -11,8 +11,8 @@ you; `styles/` has six to start from.
 horizontal on the portrait one](docs/slide.gif)
 
 It needs a picom with plugin API 0.2, which adds the animation variable hook. No picom
-release has it yet; the `hook-v2` branch of https://github.com/JornC/picom is picom's
-`next` branch with the hook added. An older picom logs `ws-direction: picom is too old`
+release has it yet; the `hook-v2` branch of https://github.com/JornC/picom is based on
+picom's `next` branch, with the hook added. An older picom logs `ws-direction: picom is too old`
 and runs without the variables.
 
 ## Install
@@ -20,7 +20,8 @@ and runs without the variables.
     make
     make install
 
-`make` builds `build/ws-direction.so` against the installed `<picom/api.h>`; to build
+`make` builds `build/ws-direction.so` against the installed `<picom/api.h>`, with a C23
+compiler (GCC 14 or clang 18 and later); to build
 against a picom source tree instead, run `make PICOM_API_CFLAGS=-I/path/to/picom/include`.
 `make install` copies the plugin to `~/.config/picom/plugins/` and the styles to
 `~/.config/picom/include/ws-direction/`, where picom finds them by name. Then, in
@@ -96,15 +97,16 @@ worked out in one go, and the root window is read once per picom update pass
 
 ## Limits
 
+- Tested with i3 only.
 - A switch is only seen when a window starts an animation whose script reads the
   variables. A switch made while picom is unredirected (`unredir-if-possible`) may not be
   seen; the next switch is then judged against the last workspace the plugin saw.
 - Each animation start costs one round trip to the X server, on picom's main thread. On
-  a quiet server that is about 20 us (median 17 to 18 us, p99 about 60 us, measured on
-  Xvfb with i3). The reply waits behind whatever the server is doing, so under load a
-  start can take milliseconds (p99 0.2 to 3 ms and a maximum of 5 to 7 ms in runs with a
-  window manager and builds running), and N windows starting in one pass wait N times. A
-  workspace switch under i3 starts 4 to 7 animations in one pass.
+  a quiet server that is about 20 µs (median 17 to 18 µs, measured on Xvfb with i3).
+  When the server is busy, the reply waits behind its other work, and a start can take a
+  few milliseconds (up to 5 to 7 ms in our busiest runs). Every window that starts an
+  animation in a pass waits once, and a workspace switch starts one for every window that
+  shows or hides.
 - A switch stays matched to its windows for 100 ms, or for 2 passes within 250 ms when
   frames are slow. On a heavily loaded machine a switch can take longer; the windows
   that come late then get 0.

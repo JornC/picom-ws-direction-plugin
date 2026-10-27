@@ -842,6 +842,13 @@ __attribute__((constructor)) static void ws_init(void) {
 	for (; screen_num > 0 && it.rem; screen_num--) {
 		xcb_screen_next(&it);
 	}
+	if (!it.rem) {
+		fprintf(stderr, "ws-direction: the display's screen does not exist, "
+		                "not adding the workspace-* variables\n");
+		xcb_disconnect(wsd.c);
+		wsd.c = NULL;
+		return;
+	}
 	wsd.root = it.data->root;
 	wsd.a_current_desktop = ws_atom("_NET_CURRENT_DESKTOP");
 	wsd.a_desktop_names = ws_atom("_NET_DESKTOP_NAMES");
