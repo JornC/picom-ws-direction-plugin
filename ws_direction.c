@@ -127,10 +127,10 @@ struct ws_rect {
 	int32_t x1, y1, x2, y2;
 };
 
-// picom puts "plugin-" in front: scripts read plugin-workspace-direction and so on.
 static const char *const ws_variable_names[] = {
-    "workspace-direction",     "workspace-monitor-x",      "workspace-monitor-y",
-    "workspace-monitor-width", "workspace-monitor-height",
+    "plugin-workspace-direction",      "plugin-workspace-monitor-x",
+    "plugin-workspace-monitor-y",      "plugin-workspace-monitor-width",
+    "plugin-workspace-monitor-height",
 };
 #define WS_N_VARIABLES (sizeof(ws_variable_names) / sizeof(ws_variable_names[0]))
 
