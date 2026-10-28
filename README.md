@@ -69,13 +69,13 @@ instead of including it; each file explains how it works.
 
 ## Variables
 
-`plugin-workspace-direction`
+`plugin-ws-direction-direction`
 : 1 if the new workspace sorts after the old one, -1 if before, 0 if the animation was
   not caused by a workspace switch on the window's monitor (a new window, scratchpad,
   fullscreen, a window moved to another workspace).
 
-`plugin-workspace-monitor-x`, `plugin-workspace-monitor-y`,
-`plugin-workspace-monitor-width`, `plugin-workspace-monitor-height`
+`plugin-ws-direction-monitor-x`, `plugin-ws-direction-monitor-y`,
+`plugin-ws-direction-monitor-width`, `plugin-ws-direction-monitor-height`
 : The monitor that shows the window's workspace. For other windows and triggers: the
   monitor that fully contains the window, else the whole screen (like
   `window-monitor-*`). For a window that closes: always the whole screen, as the window

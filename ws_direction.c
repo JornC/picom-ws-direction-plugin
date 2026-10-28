@@ -5,10 +5,10 @@
 /// can slide windows the right way, and the monitor of a window's workspace, so they can
 /// crop to it. Animation variables:
 ///
-///   plugin-workspace-direction
+///   plugin-ws-direction-direction
 ///       1 if the new workspace sorts after the old one, -1 if before, 0 if the
 ///       animation was not caused by a workspace switch on the window's monitor.
-///   plugin-workspace-monitor-x/y/width/height
+///   plugin-ws-direction-monitor-x/y/width/height
 ///       the monitor that shows the window's workspace. For other windows and triggers:
 ///       the monitor that fully contains the window, else the whole screen (like
 ///       window-monitor-*). For a window that closes: always the whole screen, as the
@@ -45,8 +45,8 @@
 ///
 /// We connect to the display named by DISPLAY, like picom itself. The variables are only
 /// added once the X connection is up. Without it, every animation whose script reads
-/// them fails to compile: picom logs 'variable name "plugin-workspace-direction" is not
-/// defined' and runs without that animation.
+/// them fails to compile: picom logs 'variable name "plugin-ws-direction-direction" is
+/// not defined' and runs without that animation.
 ///
 /// Give picom the plugin's path in its config file (plugins =
 /// "/path/to/ws-direction.so";) or with --plugins. picom releases up to v13 find a bare
@@ -128,9 +128,7 @@ struct ws_rect {
 };
 
 static const char *const ws_variable_names[] = {
-    "plugin-workspace-direction",      "plugin-workspace-monitor-x",
-    "plugin-workspace-monitor-y",      "plugin-workspace-monitor-width",
-    "plugin-workspace-monitor-height",
+    "direction", "monitor-x", "monitor-y", "monitor-width", "monitor-height",
 };
 #define WS_N_VARIABLES (sizeof(ws_variable_names) / sizeof(ws_variable_names[0]))
 
@@ -867,8 +865,9 @@ __attribute__((constructor)) static void ws_init(void) {
 	// Only now: a variable must never exist without the connection that gives it a
 	// value.
 	for (uintptr_t i = 0; i < WS_N_VARIABLES; i++) {
-		if (!api->add_animation_variable(ws_variable_names[i], ws_provide, (void *)i)) {
-			fprintf(stderr, "ws-direction: could not add %s\n",
+		if (!api->add_animation_variable("plugin-ws-direction", ws_variable_names[i],
+		                                 ws_provide, (void *)i)) {
+			fprintf(stderr, "ws-direction: could not add plugin-ws-direction-%s\n",
 			        ws_variable_names[i]);
 			return;
 		}
