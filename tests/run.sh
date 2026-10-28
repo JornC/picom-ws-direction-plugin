@@ -537,9 +537,9 @@ if grep -qF "$PLUGIN" "/proc/$PICOM_PID/maps" &&
 	grep -q 'Workspace ".*" is shown' "$LOG" &&
 	! grep -qE "ws-direction:|Cannot add animation variable" "$OUT/picom-plain.out" &&
 	((starts > 0 && decisions == 0)); then
-	pass "config without workspace-direction: animations run, plugin is never asked ($starts starts, $decisions decisions)"
+	pass "config without plugin-workspace-direction: animations run, plugin is never asked ($starts starts, $decisions decisions)"
 else
-	fail "config without workspace-direction: animations run, plugin is never asked" \
+	fail "config without plugin-workspace-direction: animations run, plugin is never asked" \
 		"$starts starts, $decisions decisions; see $LOG and $OUT/picom-plain.out"
 fi
 stop_picom

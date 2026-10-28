@@ -146,8 +146,8 @@ SET_LENGTH=()
 	[[ ${DEMO_USE_DAMAGE:-} != false ]] || echo 'use-damage = false;'
 	echo 'rules = ({'
 	echo "  match = \"!override_redirect && window_type = 'normal'\";"
-	sed -e 's/crop-y = "workspace-monitor-y";/crop-y = "workspace-monitor-y + 20";/' \
-		-e 's/crop-height = "workspace-monitor-height";/crop-height = "workspace-monitor-height - 20";/' \
+	sed -e 's/crop-y = "plugin-workspace-monitor-y";/crop-y = "plugin-workspace-monitor-y + 20";/' \
+		-e 's/crop-height = "plugin-workspace-monitor-height";/crop-height = "plugin-workspace-monitor-height - 20";/' \
 		"${SET_LENGTH[@]}" "$STYLE_FILE"
 	echo '});'
 } >"$OUT/picom.conf"

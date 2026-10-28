@@ -5,16 +5,14 @@
 /// can slide windows the right way, and the monitor of a window's workspace, so they can
 /// crop to it. Animation variables:
 ///
-///   workspace-direction       1 if the new workspace sorts after the old one, -1 if
-///                             before, 0 if the animation was not caused by a workspace
-///                             switch on the window's monitor.
-///   workspace-monitor-x/y/width/height
-///                             the monitor that shows the window's workspace. For other
-///                             windows and triggers: the monitor that fully contains the
-///                             window, else the whole screen (like window-monitor-*).
-///                             For a window that closes: always the whole screen, as the
-///                             window is gone and can't be looked up; use
-///                             window-monitor-* there.
+///   plugin-workspace-direction
+///       1 if the new workspace sorts after the old one, -1 if before, 0 if the
+///       animation was not caused by a workspace switch on the window's monitor.
+///   plugin-workspace-monitor-x/y/width/height
+///       the monitor that shows the window's workspace. For other windows and triggers:
+///       the monitor that fully contains the window, else the whole screen (like
+///       window-monitor-*). For a window that closes: always the whole screen, as the
+///       window is gone and can't be looked up; use window-monitor-* there.
 ///
 /// For workspaces it only uses EWMH data the window manager already sets:
 /// _NET_CURRENT_DESKTOP, _NET_DESKTOP_NAMES and _NET_DESKTOP_VIEWPORT on the root window,
@@ -47,7 +45,7 @@
 ///
 /// We connect to the display named by DISPLAY, like picom itself. The variables are only
 /// added once the X connection is up. Without it, every animation whose script reads
-/// them fails to compile: picom logs 'variable name "workspace-direction" is not
+/// them fails to compile: picom logs 'variable name "plugin-workspace-direction" is not
 /// defined' and runs without that animation.
 ///
 /// Give picom the plugin's path in its config file (plugins =
@@ -129,6 +127,7 @@ struct ws_rect {
 	int32_t x1, y1, x2, y2;
 };
 
+// picom puts "plugin-" in front: scripts read plugin-workspace-direction and so on.
 static const char *const ws_variable_names[] = {
     "workspace-direction",     "workspace-monitor-x",      "workspace-monitor-y",
     "workspace-monitor-width", "workspace-monitor-height",
