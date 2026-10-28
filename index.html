@@ -283,9 +283,9 @@ footer {
 			<h2>What your scripts get</h2>
 			<p>The plugin adds five variables, which scripts read like <code>window-width</code>. picom asks the plugin for their values when an animation starts, and only for scripts that use them.</p>
 			<dl>
-				<dt><code>workspace-direction</code></dt>
+				<dt><code>plugin-workspace-direction</code></dt>
 				<dd>1 if the new workspace comes after the old one, -1 if it comes before, and 0 if the animation wasn't caused by a workspace switch on that monitor: a new window, the scratchpad, fullscreen, or a window moved to another workspace.</dd>
-				<dt><code>workspace-monitor-x</code>, <code>-y</code>, <code>-width</code>, <code>-height</code></dt>
+				<dt><code>plugin-workspace-monitor-x</code>, <code>-y</code>, <code>-width</code>, <code>-height</code></dt>
 				<dd>The monitor that shows the window's workspace. Crop a slide to it, so it doesn't spill onto your other monitor.</dd>
 			</dl>
 			<p class="note">Workspaces are ordered as in <code>_NET_DESKTOP_NAMES</code>. Under i3 that means by workspace number, with unnumbered names last.</p>
@@ -298,17 +298,17 @@ footer {
 # came from, and move back to 0 in a quarter second.
 var-pos = {
   duration = 0.25;
-  start = "workspace-direction";
+  start = "plugin-workspace-direction";
   end = 0;
 };
-offset-y = "var-pos * workspace-monitor-height";
+offset-y = "var-pos * plugin-workspace-monitor-height";
 
 # Cut the window off at the edges of its own monitor,
 # so it never slides onto the other one.
-crop-x = "workspace-monitor-x";
-crop-y = "workspace-monitor-y";
-crop-width = "workspace-monitor-width";
-crop-height = "workspace-monitor-height";</code></pre>
+crop-x = "plugin-workspace-monitor-x";
+crop-y = "plugin-workspace-monitor-y";
+crop-width = "plugin-workspace-monitor-width";
+crop-height = "plugin-workspace-monitor-height";</code></pre>
 			<p>The full styles are in <a href="https://github.com/JornC/picom-ws-direction-plugin/tree/main/styles"><code>styles/</code></a>; each file explains how it works.</p>
 		</section>
 		</div>
