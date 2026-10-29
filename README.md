@@ -46,7 +46,7 @@ animation is not part of a workspace switch, every style gives the window a shor
 Each style has a `var-length` near the top, in seconds: make it larger for a slower
 switch.
 
-![All six styles at once, going through the same workspace switches](docs/styles.gif)
+![All seven styles at once, going through the same workspace switches](docs/styles.gif)
 
 - **slide**: the new workspace pushes the old one out.
 - **push**: the new workspace slides in over the old one, which drifts back and darkens,
@@ -60,7 +60,7 @@ switch.
 - **warp**: the old windows fly outward past you while the new ones come out of the
   middle of the monitor.
 - **zoom-pan**: the view zooms out, pans to the new workspace and zooms back in, as if
-  the workspaces were tiles side by side. Not in the GIF.
+  the workspaces were tiles side by side.
 
 The GIFs are recorded on Xvfb with i3, at a quarter of a 3440x1440 + 1080x1920 layout,
 with the windows cropped below the i3 bar, and cascade with `use-damage = false` (see
