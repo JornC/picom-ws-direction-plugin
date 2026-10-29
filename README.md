@@ -49,16 +49,16 @@ switch.
 ![All seven styles at once, going through the same workspace switches](docs/styles.gif)
 
 - **slide**: the new workspace pushes the old one out.
-- **push**: the new workspace slides in over the old one, which drifts back and darkens,
-  like a card put on a stack.
+- **push**: the new workspace slides in over the old one, which drifts back, like a card
+  put on a stack.
 - **wipe**: nothing moves; an edge sweeps across the monitor and uncovers the new
   workspace.
 - **fold**: the old workspace folds into one edge while the new one unfolds from the
   other, like a flat cube turning.
 - **cascade**: the old workspace slides out in one piece; the new windows follow one after
   another and land together.
-- **warp**: the old windows fly outward past you while the new ones come out of the
-  middle of the monitor.
+- **warp**: the old workspace sinks into the middle of the monitor; then the new one
+  bursts out of it, or going back, comes in from outside and shrinks into place.
 - **zoom-pan**: the view zooms out, pans to the new workspace and zooms back in, as if
   the workspaces were tiles side by side.
 
