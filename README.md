@@ -57,8 +57,8 @@ switch.
   other, like a flat cube turning.
 - **cascade**: the old workspace slides out in one piece; the new windows follow one after
   another and land together.
-- **warp**: the old workspace sinks into the middle of the monitor; then the new one
-  bursts out of it, or going back, comes in from outside and shrinks into place.
+- **warp**: the old workspace sinks into a point on one side of the middle of the
+  monitor; then the new one bursts out of a point on the other side.
 - **zoom-pan**: the view zooms out, pans to the new workspace and zooms back in, as if
   the workspaces were tiles side by side.
 
