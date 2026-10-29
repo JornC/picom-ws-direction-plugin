@@ -68,6 +68,11 @@
 #include <xcb/xcb.h>
 #include <xcb/xcbext.h>
 
+#if PICOM_API_MAJOR == 0 && PICOM_API_MINOR < 2
+#error "picom/api.h is too old: ws-direction needs picom with plugin API 0.2 or newer. \
+To build against a picom source tree, run make PICOM_API_CFLAGS=-I/path/to/picom/include"
+#endif
+
 /// How long a workspace switch stays usable after we last saw a part of it (the root
 /// window change, or a window of it that shows or hides). The window manager makes all
 /// the changes for one switch at once, but they can reach picom over a few frames. This
