@@ -4,7 +4,7 @@
 #   make PICOM_API_CFLAGS=-I/path/to/picom/include
 PICOM_API_CFLAGS ?=
 CFLAGS ?= -O2 -g
-override CFLAGS += -std=gnu23 -Wall -Wextra -fPIC -fvisibility=hidden $(PICOM_API_CFLAGS) \
+override CFLAGS += -std=gnu23 -Wall -Wextra -Wfatal-errors -fPIC -fvisibility=hidden $(PICOM_API_CFLAGS) \
 	$(shell pkg-config --cflags xcb xcb-randr)
 LDLIBS = $(shell pkg-config --libs xcb xcb-randr)
 
