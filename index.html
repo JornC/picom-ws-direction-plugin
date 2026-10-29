@@ -221,14 +221,14 @@ footer {
 					<source src="slide.webm" type="video/webm">
 					<source src="slide.mp4" type="video/mp4">
 				</video>
-				<figcaption id="demo-caption" class="text">Two monitors under i3, recorded at a quarter of their real size. Going to a higher workspace brings it in from below on the landscape monitor, and from the right on the portrait one. Going back reverses the slide. This is the slide style; there are five more below.</figcaption>
+				<figcaption id="demo-caption" class="text">Two monitors under i3, recorded at a quarter of their real size. Going to a higher workspace brings it in from below on the landscape monitor, and from the right on the portrait one. Going back reverses the slide. This is the slide style; there are six more below.</figcaption>
 			</figure>
 		</section>
 
 		<section id="styles">
 			<div class="text">
 				<h2>Styles</h2>
-				<p>The plugin only hands picom numbers; the animation itself is a few lines of config, so it can look however you like. Six styles come with it, and one line in <code>picom.conf</code> picks one. Change the name and save; picom reloads by itself.</p>
+				<p>The plugin only hands picom numbers; the animation itself is a few lines of config, so it can look however you like. Seven styles come with it, and one line in <code>picom.conf</code> picks one. Change the name and save; picom reloads by itself.</p>
 <pre><code>@include "ws-direction/fold.conf"</code></pre>
 			</div>
 			<div class="styles">
@@ -271,6 +271,14 @@ footer {
 					</video>
 					<h3 class="mono">warp</h3>
 					<p>The old windows fly outward past you while the new ones come out of the middle of the monitor.</p>
+				</figure>
+				<figure>
+					<video class="screen" muted loop playsinline preload="none" poster="zoom-pan.png" width="1130" height="480" aria-label="The zoom-pan style">
+						<source src="zoom-pan.webm" type="video/webm">
+						<source src="zoom-pan.mp4" type="video/mp4">
+					</video>
+					<h3 class="mono">zoom-pan</h3>
+					<p>The view zooms out, pans to the new workspace and zooms back in, as if the workspaces were tiles side by side.</p>
 				</figure>
 			</div>
 			<div class="text slow">
