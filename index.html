@@ -289,10 +289,12 @@ footer {
 		<div class="pair" id="variables">
 		<section>
 			<h2>What your scripts get</h2>
-			<p>The plugin adds five variables, which scripts read like <code>window-width</code>. picom asks the plugin for their values when an animation starts, and only for scripts that use them.</p>
+			<p>The plugin adds six variables, which scripts read like <code>window-width</code>. picom asks the plugin for their values when an animation starts, and only for scripts that use them.</p>
 			<dl>
 				<dt><code>plugin-ws-direction-direction</code></dt>
 				<dd>1 if the new workspace comes after the old one, -1 if it comes before, and 0 if the animation wasn't caused by a workspace switch on that monitor: a new window, the scratchpad, fullscreen, or a window moved to another workspace.</dd>
+				<dt><code>plugin-ws-direction-distance</code></dt>
+				<dd>How many of the monitor's workspaces the switch moved: 1 to the next one, 2 when it passes one, and so on. Only workspaces that exist count, so under i3 empty workspaces and the other monitor's workspaces don't. The styles don't use it yet: picom has no picture of the windows on the workspaces in between, so a longer slide would only pass empty space.</dd>
 				<dt><code>plugin-ws-direction-monitor-x</code>, <code>-y</code>, <code>-width</code>, <code>-height</code></dt>
 				<dd>The monitor that shows the window's workspace. Crop a slide to it, so it doesn't spill onto your other monitor.</dd>
 			</dl>
