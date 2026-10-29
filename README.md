@@ -5,7 +5,7 @@ workspace switch went, and which monitor a window's workspace is on. With it a `
 `hide` animation can move windows the right way and keep them on their monitor. picom
 itself knows nothing about workspaces: the plugin reads the window manager's EWMH
 properties and hands the scripts five numbers. What the scripts do with them is up to
-you; `styles/` has six to start from.
+you; `styles/` has seven to start from.
 
 ![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
 horizontal on the portrait one](docs/slide.gif)
@@ -59,6 +59,8 @@ switch.
   another and land together.
 - **warp**: the old windows fly outward past you while the new ones come out of the
   middle of the monitor.
+- **zoom-pan**: the view zooms out, pans to the new workspace and zooms back in, as if
+  the workspaces were tiles side by side. Not in the GIF.
 
 The GIFs are recorded on Xvfb with i3, at a quarter of a 3440x1440 + 1080x1920 layout,
 with the windows cropped below the i3 bar, and cascade with `use-damage = false` (see

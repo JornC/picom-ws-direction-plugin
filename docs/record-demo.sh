@@ -4,8 +4,8 @@
 # colored windows, and picom with the plugin and a style from styles/ in a rule for normal
 # windows. Two changes for the demo only: windows are cropped below the 20 px bar, and
 # picom uses the xrender backend, because glx on Xvfb doesn't redraw the bar.
-# Usage: make && docs/record-demo.sh OUTDIR [STYLE]   (slide, push, wipe, fold, cascade or
-# warp; default slide)
+# Usage: make && docs/record-demo.sh OUTDIR [STYLE]   (slide, push, wipe, fold, cascade,
+# warp or zoom-pan; default slide)
 # Environment: PICOM (default: picom on the PATH), DEMO_DISPLAY (default :205),
 # DEMO_LENGTH (seconds per switch instead of the style's var-length; it also makes the
 # demo two switches, forward and back), DEMO_USE_DAMAGE (set to false for
