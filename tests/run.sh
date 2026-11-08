@@ -53,7 +53,7 @@
 # Usage: make && tests/run.sh, or make check-harness; make check-all runs the unit tests
 # first.
 # Environment: PICOM (picom binary, default: picom on the PATH; it must have plugin API
-# 0.9), I3 (default /usr/bin/i3),
+# 0.9, custom animation triggers and PICOM_DEBUG=frame_layout), I3 (default /usr/bin/i3),
 # WSDIR_DISPLAY (default :91), WSDIR_WORK (directory for the i3 socket and logs, default
 # $XDG_RUNTIME_DIR/wsdir-<display number>), WSDIR_SETTLE (seconds to wait after each
 # step, default 0.7), WSDIR_PLUGIN (the plugin, default build/ws-direction.so).
@@ -98,7 +98,7 @@ die() {
 [[ ${#SOCK} -le 107 ]] || die "socket path too long (${#SOCK} bytes): $SOCK"
 [[ -n $PICOM && -x $PICOM ]] || die "picom not found, set PICOM"
 for tool in "$I3" Xvfb xrandr i3-msg xterm xdotool xprop import magick cc pkg-config \
-	dbus-send jq; do
+	dbus-send jq python3; do
 	command -v "$tool" >/dev/null || die "missing tool: $tool"
 done
 [[ ! -e /tmp/.X${DISP#:}-lock ]] || die "display $DISP is already in use"
@@ -320,6 +320,19 @@ fail() {
 
 log_mark() { wc -l <"$LOG"; }
 
+# check_frames NAME LOG [OPTION...]: check every frame in picom's frame timing log LOG,
+# written with PICOM_DEBUG="frame_timing=LOG;frame_layout=1", with tests/check-frames.py
+# and its OPTIONs.
+check_frames() {
+	local report lines
+	if report=$("$HERE/check-frames.py" "$2" "${MONITORS[@]}" "${@:3}" 2>&1); then
+		pass "$1"
+	else
+		mapfile -t lines <<<"$report"
+		fail "$1" "${lines[@]}"
+	fi
+}
+
 # The directions picom logged after line $1, one "title trigger direction" per line.
 # "open" counts as "show": a window's first show after picom started is an open.
 directions_since() {
@@ -443,6 +456,8 @@ run_bg "$OUT/xvfb.log" Xvfb "$DISP" -screen 0 4520x1920x24 +extension GLX +exten
 wait_until 10 xprop -root || die "Xvfb did not start"
 xrandr --setmonitor DPT 3440/800x1440/337+0+480 screen >/dev/null
 xrandr --setmonitor HDT 1080/300x1920/530+3440+0 none >/dev/null
+# The same two monitors, for check-frames.py.
+MONITORS=(--monitor "0,480,3440,1440" --monitor "3440,0,1080,1920")
 
 read -ra XCB_FLAGS <<<"$(pkg-config --cflags --libs xcb)"
 cc -O2 -Wall -o "$OUT/fakewm" "$HERE/fakewm.c" "${XCB_FLAGS[@]}" || die "cannot build fakewm"
@@ -478,7 +493,7 @@ else
 	fail "slide style loads (picom --diagnostics)" "see $OUT/diagnostics.out"
 fi
 if grep -q "plugin API is not compatible" "$OUT/diagnostics.out"; then
-	die "this picom does not have plugin API 0.9, see $OUT/diagnostics.out"
+	die "this picom does not have plugin API 0.9 of the picom fork, see $OUT/diagnostics.out"
 fi
 "$PICOM" --config "$OUT/wave.conf" --diagnostics >"$OUT/diagnostics-wave.out" 2>&1
 grep -qx "  - wave" "$OUT/diagnostics-wave.out" ||
@@ -1497,6 +1512,8 @@ pass_case "a slow X server, the root window changing again during the read: one 
 stop_picom
 # slide animates a switch with show and hide, which picom starts itself: after the pause,
 # with the plugin's variables.
+# with the plugin's variables. (Its frames are not checked here: slide's own show and hide
+# fail the pops check, also in a switch without a grab.)
 rm -f "$OUT/frames-slow-slide.csv"
 PICOM_DEBUG="frame_timing=$OUT/frames-slow-slide.csv;frame_layout=1" start_picom "$CONFIG" picom-slow-slide
 mark=$(log_mark)

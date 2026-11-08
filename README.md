@@ -276,6 +276,15 @@ Their name is `ws-direction backdrop <workspace>`. As they are at the bottom of 
 stack, a desktop window that the window manager also puts at the bottom may be drawn
 over them.
 
+### Checking a style
+
+`make && tests/scene.sh OUTDIR STYLE` runs a style, by name or path, through workspace
+switches on a virtual screen, also switches that interrupt each other, and checks every
+frame picom draws with `tests/check-frames.py`: no window jumps, pops in or out, or
+leaves a gap between workspaces, and it writes a plot and strips of frames. With
+`LENGTH=style` it runs at the style's own length. See [Judging an
+animation](CONTRIBUTING.md#judging-an-animation).
+
 ## Reference
 
 ### Variables
@@ -695,7 +704,8 @@ events of the pass, but it is not ordered against picom's own request queue.
 ## Development
 
 [CONTRIBUTING.md](CONTRIBUTING.md) says how to build against the picom fork, run the unit
-tests (`make check`, without an X server) and the harness (`make check-harness`), and
+tests (`make check`, without an X server) and the harness (`make check-harness`, which
+also needs a picom with the frame layout log), judge an animation frame by frame, and
 what the rules for commits are.
 [CHANGELOG.md](CHANGELOG.md) lists what changed. The plugin is under the MPL-2.0, see
 `LICENSE`.

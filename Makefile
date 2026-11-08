@@ -73,9 +73,11 @@ build/unit/%.o: tests/unit/%.c
 build/unit-tests: $(UNIT_OBJS) $(UNIT_MODULES)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-# Only the unit tests, which need no X server: what a package's check step runs.
+# Only the unit tests, which need no X server: what a package's check step runs. They
+# include the tests of tests/check-frames.py, which need Python 3.
 check: build/unit-tests
 	build/unit-tests
+	PYTHONDONTWRITEBYTECODE=1 python3 tests/check_frames_test.py
 
 # The harness, tests/run.sh, which needs X, i3 and the picom fork. Its variables (PICOM,
 # WSDIR_DISPLAY and the others in tests/run.sh) reach it from make's command line or the
@@ -139,9 +141,10 @@ format:
 format-check:
 	$(CLANG_FORMAT) --dry-run --Werror $(FORMAT_FILES)
 
-# shellcheck on the shell scripts.
+# shellcheck on the shell scripts, and a syntax check of the Python ones.
 lint:
 	shellcheck tests/*.sh docs/*.sh
+	PYTHONPYCACHEPREFIX=build/pycache python3 -m py_compile tests/*.py
 
 clean:
 	rm -rf build

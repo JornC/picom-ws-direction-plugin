@@ -84,6 +84,7 @@ Build and tests:
 - `make check` runs the unit tests without an X server. `make check-harness` runs the
   harness, `tests/run.sh`, on Xvfb with i3 and a fake window manager, and
   `make check-all` both.
+- `tests/check-frames.py` and `tests/scene.sh` check an animation frame by frame.
 - `make lint`, `make format` and `make format-check`; `SANITIZE=address,undefined`.
 - A GitHub Actions workflow. It fetches the picom fork at `PICOM_REF`.
 - A README for users and developers, and a CONTRIBUTING.md.
