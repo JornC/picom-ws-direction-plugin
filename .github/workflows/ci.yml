@@ -122,7 +122,9 @@ jobs:
 
       - name: Build and install picom
         run: |
-          meson setup --buildtype=release picom/build picom
+          # --libdir=lib: without it meson picks lib64 in this container, where pkg-config
+          # doesn't look for picom-api.pc.
+          meson setup --buildtype=release --libdir=lib picom/build picom
           ninja -C picom/build
           ninja -C picom/build install
 
