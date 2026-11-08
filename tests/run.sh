@@ -12,11 +12,11 @@
 # make install put in place, the man page too.
 #
 # Phase 1: stock i3, xterms on several workspaces, and picom with the plugin,
-# styles/slide.conf and debug logging. It checks that the plugin's first log line is its
+# tests/showhide.conf (a slide made of show and hide only) and debug logging. It checks that the plugin's first log line is its
 # version, the command's. It runs i3 commands through i3-msg and checks
 # the direction (and for some switches the distance and the other variables) that the
 # plugin logs for every window that shows, opens or hides. It also takes screenshots in
-# the middle of slowed-down slides, to check the slide style slides the right way and
+# the middle of slowed-down slides, to check that it slides the right way and
 # stays on its monitor. Then it runs picom with
 # tests/picom-anim.conf, whose scripts don't read the variables, and checks the plugin
 # is loaded but never asked (the hook calls a provider only for scripts that read its
@@ -76,7 +76,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 PICOM=${PICOM:-$(command -v picom)}
 I3=${I3:-/usr/bin/i3}
-STYLE=$ROOT/styles/slide.conf
+STYLE=$HERE/showhide.conf
 PLAIN_CONFIG=$HERE/picom-anim.conf
 DISP=${WSDIR_DISPLAY:-:91}
 WORK=${WSDIR_WORK:-${XDG_RUNTIME_DIR:-/tmp}/wsdir-${DISP#:}}
@@ -108,7 +108,7 @@ rm -rf "$WORK/i3"
 [[ -f $PLUGIN ]] || die "plugin not found: $PLUGIN (run make)"
 # picom loads a plugin by its full path, and /proc/<pid>/maps shows that path.
 PLUGIN=$(realpath "$PLUGIN")
-# The slide style in a rule for normal windows. Copied in, not included, so the checks
+# The show and hide test style in a rule for normal windows. Copied in, not included, so the checks
 # below can change its timing with sed.
 {
 	echo "plugins = \"$PLUGIN\";"
@@ -122,8 +122,9 @@ PLUGIN=$(realpath "$PLUGIN")
 	echo '});'
 } >"$OUT/wsdir-plugin.conf"
 CONFIG=$OUT/wsdir-plugin.conf
-# Phase 1 uses the same. The plugin declares ws-pass, but slide has no animation for it, so
-# picom ignores the plugin's starts, and every show and hide runs as it would without them.
+# Phase 1 uses the same. The plugin declares ws-pass, but showhide.conf has no animation
+# for it, so picom ignores the plugin's starts, and every show and hide runs as it would
+# without them.
 I3_CONFIG=$CONFIG
 # A custom trigger that draws a window, hidden or not, for 2 s, cropped to the monitor
 # the plugin gives. Normal windows keep their image while hidden. Nothing else reads a
@@ -196,6 +197,10 @@ rules = ({
 });
 EOF
 } >"$OUT/pass.conf"
+# The styles include ws-direction/parts/*.conf, which picom looks for next to the config
+# first, so the copy in $OUT is the one under test.
+mkdir -p "$OUT/ws-direction/parts"
+cp "$ROOT"/styles/parts/*.conf "$OUT/ws-direction/parts/"
 # pass_time DISTANCE FRACTION: seconds until FRACTION of a pass.conf switch of DISTANCE
 # workspaces is done.
 pass_time() {
@@ -488,9 +493,9 @@ fi
 if "$PICOM" --config "$CONFIG" --diagnostics >"$OUT/diagnostics.out" 2>&1 &&
 	grep -q "Config file used: $CONFIG" "$OUT/diagnostics.out" &&
 	! grep -qiE "error.*(config|script|parse|line)" "$OUT/diagnostics.out"; then
-	pass "slide style loads (picom --diagnostics)"
+	pass "the show and hide test style loads (picom --diagnostics)"
 else
-	fail "slide style loads (picom --diagnostics)" "see $OUT/diagnostics.out"
+	fail "the show and hide test style loads (picom --diagnostics)" "see $OUT/diagnostics.out"
 fi
 if grep -q "plugin API is not compatible" "$OUT/diagnostics.out"; then
 	die "this picom does not have plugin API 0.9 of the picom fork, see $OUT/diagnostics.out"
@@ -788,7 +793,7 @@ for gap in 0.005 0.03 0.06; do
 		4:Misc 2:Web 1:IDE
 done
 
-# Screenshot checks: the slide style made slow (6 s) and linear, so a screenshot
+# Screenshot checks: the show and hide test style made slow (6 s) and linear, so a screenshot
 # taken about 1.5 s into a switch shows both workspaces, 25% of the way.
 # DPT: 1 is red, 2 is blue. HDT: 3 is green, 5 is yellow.
 stop_picom
@@ -1163,6 +1168,83 @@ i3_case "seed: first switch is HDT 3->5 while DPT shows 7, no open animations" \
 	'workspace 5:Music' "ws3-a hide 1"
 stop_picom
 
+# Every style as it ships, at its own length, through switches that interrupt each other
+# at 0.3 and 0.7 of a switch, the same way and the other way, on DPT and on HDT, which
+# turns sideways. check-frames.py checks every frame, with --seams for the styles whose
+# workspaces tile the monitor.
+declare -A OVERVIEW_OF=()
+# style_length STYLE: the style's var-length, in seconds.
+style_length() { sed -nE 's/.*var-length = ([0-9.]+);.*/\1/p' "$ROOT/styles/$1.conf" | head -n 1; }
+style_frames() {
+	local style=$1 overview=${OVERVIEW_OF[$1]:-} length wait frames seams=() spec ws t0='' ok
+	length=$(style_length "$style")
+	[[ -z $overview ]] || length=$(awk -v a="$length" -v b="$(style_length "$overview")" \
+		'BEGIN { print (a > b ? a : b) }')
+	wait=$(awk -v l="$length" 'BEGIN { print 2 * l }')
+	frames=$OUT/frames-style-$style.csv
+	{
+		echo "plugins = \"$PLUGIN\";"
+		echo 'backend = "glx";'
+		echo 'vsync = true;'
+		echo 'use-damage = true;'
+		echo 'unredir-if-possible = false;'
+		echo 'rules = ({'
+		echo "  match = \"!override_redirect && window_type = 'normal'\";"
+		cat "$ROOT/styles/$style.conf"
+		if [[ -n $overview ]]; then
+			echo '}, {'
+			echo "  match = \"!override_redirect && window_type = 'normal'\";"
+			cat "$ROOT/styles/$overview.conf"
+		fi
+		echo '});'
+	} >"$OUT/style-frames.conf"
+	rm -f "$frames"
+	PICOM_DEBUG="frame_timing=$frames;frame_layout=1" start_picom "$OUT/style-frames.conf" \
+		"picom-style-$style"
+	# picom keeps the images of the windows it showed since it started.
+	for ws in 2:Web 4:Misc 7:Extra 1:IDE HDT 5:Music 3:Term DPT; do
+		case $ws in
+		DPT | HDT) i3cmd "focus output $ws" ;;
+		*) i3cmd "workspace $ws" ;;
+		esac
+		sleep "$wait"
+	done
+	for spec in 2:Web 1:IDE 7:Extra 4:Misc@0.3 1:IDE@0.7 2:Web 4:Misc@0.3 1:IDE@0.7 \
+		HDT 5:Music 3:Term@0.3 5:Music@0.7 DPT ${overview:+2:Web o@0.5 o 1:IDE}; do
+		ws=${spec%@*}
+		if [[ $ws == DPT || $ws == HDT ]]; then
+			i3cmd "focus output $ws"
+			continue
+		fi
+		if [[ $spec == *@* && -n $t0 ]]; then
+			sleep_until "$t0" "$(awk -v l="$length" -v f="${spec#*@}" 'BEGIN { print l * f }')"
+		elif [[ -n $t0 ]]; then
+			sleep_until "$t0" "$wait"
+		fi
+		t0=$(date +%s.%N)
+		if [[ $ws == o ]]; then
+			"$ROOT/build/ws-direction" overview toggle
+		else
+			i3cmd "workspace $ws"
+		fi
+	done
+	sleep "$wait"
+	stop_picom
+	case $style in
+	slide | pass-slide | push | wipe | fold) seams=(--seams) ;;
+	esac
+	ok="no jumps or pops, no stop at full speed, ends at rest"
+	((${#seams[@]})) && ok+=", the workspaces tile the monitor"
+	check_frames "frames: $style${overview:+ and $overview}, switches interrupted at 0.3 and 0.7: $ok" \
+		"$frames" "${seams[@]}"
+}
+for style_file in "$ROOT"/styles/*.conf; do
+	style=$(basename "$style_file" .conf)
+	# The overview styles run next to their switch styles.
+	grep -q 'triggers = \["show"' "$style_file" || continue
+	style_frames "$style"
+done
+
 # An i3 restart puts every window in a new frame, and picom has no image of the new frames
 # of hidden workspaces. A picom config change drops all images too. The plugin sees
 # hidden windows lose the image picom kept of them, and shows their workspaces once, with
@@ -1510,16 +1592,17 @@ sleep "$(pass_time 1 1.2)"
 pass_case "a slow X server, the root window changing again during the read: one start of the switch" \
 	"$mark" '"2:B" -> "1:A"' fa fb
 stop_picom
-# slide animates a switch with show and hide, which picom starts itself: after the pause,
 # with the plugin's variables.
-# with the plugin's variables. (Its frames are not checked here: slide's own show and hide
-# fail the pops check, also in a switch without a grab.)
+# showhide.conf animates a switch with show and hide, which picom starts itself: after the
+# pause, with the plugin's variables. (Its frames are not checked here: a show and a hide
+# that the window manager sends a frame apart are what the switch styles' ws-pass avoids.
+# The styles' own frames are checked above.)
 rm -f "$OUT/frames-slow-slide.csv"
 PICOM_DEBUG="frame_timing=$OUT/frames-slow-slide.csv;frame_layout=1" start_picom "$CONFIG" picom-slow-slide
 mark=$(log_mark)
 fakewm grab current 1 sleep 20 map "$FB" unmap "$FA" sleep 80 ungrab
 sleep "$SETTLE"
-slow_read_case "a slow X server with slide: the plugin pauses the screen for its read" \
+slow_read_case "a slow X server with show and hide: the plugin pauses the screen for its read" \
 	"$OUT/frames-slow-slide.csv" "$mark"
 GOT=$(directions_since "$mark")
 expect "  (and the show and hide still start, with the switch's direction)" "fb show 1" "fa hide 1"
@@ -1537,17 +1620,17 @@ else
 	fail "no errors in the picom logs" "$errors"
 fi
 
-# The plugin declares ws-pass itself, so no config lists it, but slide has no animation for
-# it. The plugin starts it on every switch, picom ignores those starts, and the shows and
-# hides run as usual (checked by the cases of phase 1 and 2).
+# The plugin declares ws-pass itself, so no config lists it, but showhide.conf has no
+# animation for it. The plugin starts it on every switch, picom ignores those starts, and
+# the shows and hides run as usual (checked by the cases of phase 1 and 2).
 tried=$(grep -cE "windows, started ws-pass on [1-9][0-9]* \(in pass" "$OUT/picom-i3.log")
 ignored=$(grep -c "Not starting animation ws-pass .* because it has no animation for it" \
 	"$OUT/picom-i3.log")
 started=$(grep -c "Starting animation ws-pass" "$OUT/picom-i3.log")
 if ((tried > 0 && ignored > 0 && started == 0)); then
-	pass "the plugin declares ws-pass, slide has no animation for it: picom ignores the starts ($tried switches, $ignored windows)"
+	pass "the plugin declares ws-pass, showhide.conf has no animation for it: picom ignores the starts ($tried switches, $ignored windows)"
 else
-	fail "the plugin declares ws-pass, slide has no animation for it: picom ignores the starts" \
+	fail "the plugin declares ws-pass, showhide.conf has no animation for it: picom ignores the starts" \
 		"$tried switches with starts, $ignored starts ignored, $started ws-pass animations started"
 fi
 tried=$(grep -cE "windows, started ws-pass on [1-9][0-9]* \(in pass" "$OUT/picom-fake.log")

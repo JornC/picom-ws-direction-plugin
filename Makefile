@@ -99,8 +99,9 @@ FORCE:
 
 # Puts the plugin and the styles where picom finds them by name, for
 #   plugins = "ws-direction.so";   and   @include "ws-direction/slide.conf"
-# and the command on the PATH, with its man page. It overwrites what is in STYLEDIR: keep
-# your own copies of styles next to picom.conf instead. By default for one user: the
+# and the command on the PATH, with its man page. The styles include the files in
+# styles/parts, so those go along. It overwrites what is in STYLEDIR: keep your own
+# copies of styles and parts next to picom.conf instead. By default for one user: the
 # plugin and the styles in picom's config directory, where picom finds plugins and
 # includes, and the command and the man page under PREFIX. A package sets DESTDIR,
 # PREFIX=/usr, STYLEDIR, and PLUGINDIR to picom's plugin directory: picom/plugins under
@@ -116,11 +117,13 @@ BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
 
 STYLES = $(notdir $(wildcard styles/*.conf))
+PARTS = $(notdir $(wildcard styles/parts/*.conf))
 MAN = $(wildcard man/ws-direction.1)
 
 install: all
 	install -Dm755 build/ws-direction.so $(DESTDIR)$(PLUGINDIR)/ws-direction.so
 	install -Dm644 -t $(DESTDIR)$(STYLEDIR) $(addprefix styles/,$(STYLES))
+	install -Dm644 -t $(DESTDIR)$(STYLEDIR)/parts $(addprefix styles/parts/,$(PARTS))
 	install -Dm755 build/ws-direction $(DESTDIR)$(BINDIR)/ws-direction
 	$(if $(MAN),install -Dm644 $(MAN) $(DESTDIR)$(MANDIR)/man1/ws-direction.1)
 
@@ -128,8 +131,10 @@ install: all
 uninstall:
 	rm -f $(DESTDIR)$(PLUGINDIR)/ws-direction.so $(DESTDIR)$(BINDIR)/ws-direction \
 		$(addprefix $(DESTDIR)$(STYLEDIR)/,$(STYLES)) \
+		$(addprefix $(DESTDIR)$(STYLEDIR)/parts/,$(PARTS)) \
 		$(if $(MAN),$(DESTDIR)$(MANDIR)/man1/ws-direction.1)
-	rmdir --ignore-fail-on-non-empty $(DESTDIR)$(STYLEDIR) 2>/dev/null || true
+	rmdir --ignore-fail-on-non-empty $(DESTDIR)$(STYLEDIR)/parts $(DESTDIR)$(STYLEDIR) \
+		2>/dev/null || true
 
 # clang-format output differs between major versions; the code is formatted with 23.
 CLANG_FORMAT ?= clang-format

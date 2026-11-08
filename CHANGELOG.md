@@ -13,6 +13,10 @@ Upgrading from the unversioned plugin on `main`:
   `monitor-height`, keep their names and meaning. `distance`, `faces`, `face`,
   `selected`, `placed`, `index`, `shown`, `unfolded`, `monitor-width-mm`,
   `monitor-height-mm` and `backdrop` are new.
+- `var-length` is set in every part of a style; the old README said once, near the top.
+  For a slower switch, change it in every part.
+- Copies of the old styles keep working. They have no `ws-pass` part, so they don't draw
+  the workspaces a switch passes, as the shipped styles do.
 - `make install` now also installs the command, `ws-direction`, and its man page.
 - The `WS_DIRECTION_LOG` line for an animation says `direction = N` where it said
   `workspace-direction = N`; change what greps for it.
@@ -32,6 +36,14 @@ Variables:
 - A window that closes, or hides as it closes, gets the monitor, faces and index it had.
 - `WS_DIRECTION_LOG` logs every decision, in picom's log format. Its first line is the
   plugin's version.
+
+Styles:
+
+- Seven switch styles that move all workspaces of the monitor through `ws-pass`, with
+  one strip they all carry: slide, push, wipe, fold, cascade, warp and zoom-pan. What a
+  family of styles shares is in one part each in `styles/parts/`.
+- Workspaces move along the short side of each monitor. `var-length` sets how long a
+  switch takes. A switch made while one runs goes on from where the windows are.
 
 Switch passes:
 

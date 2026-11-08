@@ -51,15 +51,15 @@ against a picom source tree instead, run
 `make PICOM_API_CFLAGS=-I/path/to/picom/include`.
 
 `make install` puts the plugin in `~/.config/picom/plugins/`, the styles in
-`~/.config/picom/include/ws-direction/`, the command in `~/.local/bin/`, and its man page
-in `~/.local/share/man/man1/`. picom finds the plugin and the styles there by name.
-`~/.config` is `$XDG_CONFIG_HOME` when that is set. `PREFIX` (default `~/.local`) sets
-where the command and the man page go, in `bin/` and `share/man/` under it;
-`PICOM_CONFIG_DIR`, `PLUGINDIR`, `STYLEDIR`, `BINDIR`, `MANDIR` and `DESTDIR` change where
-things go too. `make install` overwrites what is in the style directory, so keep your
-own copies of styles elsewhere (see [Styles](#styles)). `make uninstall`, with the same
-variables, removes what `make install` put in place, and the style directory if that
-leaves it empty.
+`~/.config/picom/include/ws-direction/` (and the files they include in `parts/` there),
+the command in `~/.local/bin/`, and its man page in `~/.local/share/man/man1/`. picom
+finds the plugin and the styles there by name. `~/.config` is `$XDG_CONFIG_HOME` when that
+is set. `PREFIX` (default `~/.local`) sets where the command and the man page go, in
+`bin/` and `share/man/` under it; `PICOM_CONFIG_DIR`, `PLUGINDIR`, `STYLEDIR`, `BINDIR`,
+`MANDIR` and `DESTDIR` change where things go too. `make install` overwrites what is in
+the style directory, so keep your own copies of styles elsewhere (see [Styles](#styles)).
+`make uninstall`, with the same variables, removes what `make install` put in place, and
+the style directory if that leaves it empty.
 
 A package installs the plugin in picom's plugin directory, which is `picom/plugins/` under
 the library directory picom was installed to, for example `/usr/lib/picom/plugins/`. The
@@ -72,7 +72,11 @@ command goes to `/usr/bin/`, the man page to `/usr/share/man/man1/` and the styl
 
 picom looks for styles there too, after `~/.config/picom/include/`.
 
-Without `make install`, give the plugin and the style by their full path.
+Without `make install`, give the plugin and the style by their full path. The styles
+include files from `ws-direction/parts/`, which picom looks up from the directory of
+`picom.conf` and then from its include directories, not next to the style. So without
+`make install`, also copy `styles/parts/` to `ws-direction/parts/` next to `picom.conf`,
+as `tests/run.sh` does.
 
 ## Quick start
 
@@ -98,11 +102,13 @@ To check that it works:
 ## Styles
 
 Each style is one file in `styles/`. To switch, change the name in the `@include` line;
-picom reloads by itself when you save `picom.conf`. Workspaces move along the short side
-of each monitor: up and down on a landscape monitor, sideways on a portrait one. When an
-animation is not part of a workspace switch, every style gives the window a short fade.
-Each style has a `var-length` near the top, in seconds: make it larger for a slower
-switch.
+picom reloads by itself when you save `picom.conf`. By default, in every style the
+workspaces lie along the short side of each monitor: up and down on a landscape monitor,
+sideways on a portrait or square one, a higher workspace below (or right of) a lower one.
+When an animation is not part of a workspace switch, a switch style gives the window a
+short fade. Each part of a style sets `var-length`, in seconds: make it larger, in every
+part, for a slower switch. What a family of styles shares is in one file in
+`styles/parts/`, see below.
 
 - **slide**: the new workspace pushes the old one out.
 - **push**: the new workspace slides in over the old one, which drifts back, like a card
@@ -118,6 +124,12 @@ switch.
 - **zoom-pan**: the view zooms out, pans to the new workspace and zooms back in, as if
   the workspaces were tiles side by side.
 
+Every switch style moves all workspaces of the monitor in a switch, through `ws-pass`: a
+switch that passes workspaces shows them on the way (going from 1 to 4, the windows of 2
+and 3 come by), and a switch made while one runs goes on from where every window is.
+They all draw hidden windows from the images picom keeps of them; see
+[Hidden workspaces](#hidden-workspaces).
+
 The styles are plain picom animation scripts, and each file explains in its header how
 it works and which `var-*` you can change. To change one, copy it into your config
 instead of including it. Or copy the file to `ws-direction/` next to your `picom.conf`
@@ -126,6 +138,25 @@ the copy wins over both install places, and neither `make install` nor a package
 there. A copy in `~/.config/picom/include/ws-direction/` also wins over the package's,
 but `make install` overwrites it. Save `picom.conf` once after you make a copy: picom
 reloads when a file it read changes, and it didn't read the new copy yet.
+
+The styles share what belongs together in `styles/parts/`, which are not styles, so you
+change it in one place and styles that go together can't drift apart:
+
+- `axis.conf`, for all styles: `var-axis` (0 along the short side of the monitor, 1
+  always sideways, 2 always up and down) and `var-reverse` (1 a higher workspace lies
+  below or right, -1 above or left).
+- `switch.conf`, for the switch styles: `var-other-time` (the fade outside a switch,
+  0.1 s), `var-wrap` (1 puts the workspaces on a ring, and a switch goes the short way
+  round), and what a switch is made of: `var-travel`, `var-face`, `var-start`, `var-end`,
+  `var-time`, `var-pos`, `var-q` and `var-dip`.
+- `zoom.conf`, for the zoom styles: `var-zoom` and `var-gap`.
+
+`make install` puts them next to the styles. To change one, copy it to
+`ws-direction/parts/` next to your `picom.conf` (`~/.config/picom/ws-direction/parts/`).
+The same holds as for a style: the copy wins, nothing installs there, and picom reads it
+once you save `picom.conf`. The settings of one style, like `var-length` and
+`var-pass-growth` (how much of `var-length` each workspace a switch passes adds), are in
+the parts of its own file.
 
 ## Hidden workspaces
 
@@ -218,8 +249,10 @@ often sees the old workspace hide one pass after the switch. A window that moves
 new workspace with the switch (`move container to workspace 4; workspace 4`) stays on
 screen, so it gets no `ws-pass`.
 
-To draw them, follow [Drawing hidden windows](#drawing-hidden-windows), and give the
-windows an animation for `ws-pass`:
+Every switch style does this. Without the plugin, picom logs an error about the style's
+`ws-pass` part. To write your own, follow
+[Drawing hidden windows](#drawing-hidden-windows), and give the windows an animation for
+`ws-pass`:
 
     rules = ({
       match = "!override_redirect && window_type = 'normal'";
@@ -236,6 +269,25 @@ So one block moves every window of a switch, from face `face` to face
 `face - direction * distance`. Give it `suppressions = ["show", "hide"]`: i3 shows and
 hides the windows of the old and the new workspace while their `ws-pass` already runs,
 and without it they would start over.
+
+A switch can come while the last one still runs. Then every window of the monitor is
+still in its `ws-pass`, and gets a new one. picom starts a transition of the new
+animation from the current value of the variable of the same name in the animation it
+interrupts. So make the moving part a transition of the window's place relative to the
+view, like `var-pos` in pass-slide (from `face` to `face - direction * distance`): it
+means the same in both switches, so every window goes on from where it is and the
+workspaces stay one strip. A transition of something that only makes sense within one
+switch, like how far along the switch is, would make the windows jump. The same holds
+for anything else the windows of two workspaces share: push and wipe crop each
+workspace by its own `var-pos` (where the card on top of it, or the moving monitor,
+lies), not by a share of the switch.
+
+A style that uses `parts/switch.conf` sets `var-from` and `var-to`, where a window is on
+the strip at the start and the end of a switch, and its curve as `var-ease`, from
+`var-start` to `var-end` with `reset = true`; `var-pos` is then the window's place. The
+interrupted animation must have put the window on the strip, which every style says
+with `var-on-strip` (`parts/axis.conf`); after an animation from another rule a window
+starts from `var-from`.
 
 picom ignores a start on a window it has no image of yet, and on a window whose rule has
 no `ws-pass` animation. Such a window gets its `show` or `hide` as usual.
@@ -641,8 +693,8 @@ workspace the plugin didn't think was shown is a switch to it, and the plugin st
   without changing `_NET_CURRENT_DESKTOP` first leaves the plugin a moment in which no
   workspace is shown on that monitor. A hide in that moment comes before the plugin can
   know where the switch goes, so it gets direction 0. i3 shows the new windows first.
-- **A changed copy of a style doesn't take effect.** Save `picom.conf` once after you
-  make the copy, so picom reads it.
+- **A changed copy of a style or part doesn't take effect.** Save `picom.conf` once after
+  you make the copy, so picom reads it.
 
 ## How it works
 

@@ -25,7 +25,9 @@ W=1130 H=480
 [[ -f $PLUGIN ]] || { echo "run make first"; exit 2; }
 [[ -f $STYLE_FILE ]] || { echo "no such style: $STYLE_FILE"; exit 2; }
 [[ ! -e /tmp/.X${DISP#:}-lock ]] || { echo "display $DISP in use"; exit 2; }
-mkdir -p "$OUT"
+mkdir -p "$OUT/ws-direction/parts"
+# The styles include their parts relative to picom.conf's directory first.
+cp "$ROOT"/styles/parts/*.conf "$OUT/ws-direction/parts/"
 rm -f "$OUT"/*.log "$OUT"/raw.mkv "$SOCK"
 export DISPLAY=$DISP
 
