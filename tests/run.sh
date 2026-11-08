@@ -39,17 +39,18 @@
 # "open --wait --buttons" returns for the other buttons. With styles/cube.conf and
 # styles/flip.conf, slowed down, a screenshot partway through a switch shows the
 # workspaces in perspective, on their monitor, and not the back of the flip's card, and
-# check-frames.py checks every frame of those switches in picom's frame timing log. With
-# styles/unfold.conf next to cube, the overview opens the box into a flat strip and closes
-# it again, and check-frames.py checks those frames too. Then every style runs as it
-# ships, at its own length, through switches that interrupt each other the same way and
-# the other way, on both monitors (and with wall and unfold the overview opened halfway
-# into a switch), and check-frames.py checks every frame. Last it restarts i3 and changes
-# picom's config, which leave picom without images of the hidden workspaces, and checks
-# that the plugin gets them back by itself, with the screen, the keyboard and the pointer
-# frozen, that it puts the pointer back, and that it waits for a window that paints itself
-# late (tests/slowpaint.c). And that "ws-direction warm" gets them back when asked, also
-# at picom's start, and "warm --auto off" stops the plugin from doing it by itself.
+# check-frames.py checks every frame of those switches in picom's frame timing log, also
+# with the eye at a distance in millimetres (var-eye-mm). With styles/unfold.conf next to
+# cube, the overview opens the box into a flat strip and closes it again, and check-
+# frames.py checks those frames too. Then every style runs as it ships, at its own length,
+# through switches that interrupt each other the same way and the other way, on both
+# monitors (and with wall and unfold the overview opened halfway into a switch), and
+# check-frames.py checks every frame. Last it restarts i3 and changes picom's config,
+# which leave picom without images of the hidden workspaces, and checks that the plugin
+# gets them back by itself, with the screen, the keyboard and the pointer frozen, that it
+# puts the pointer back, and that it waits for a window that paints itself late
+# (tests/slowpaint.c). And that "ws-direction warm" gets them back when asked, also at
+# picom's start, and "warm --auto off" stops the plugin from doing it by itself.
 # The harness runs on a D-Bus session bus of its own.
 #
 # Phase 2: i3 is replaced by fakewm.c, a tiny stand-in window manager. It can spread one
@@ -1725,6 +1726,33 @@ turn_case "screenshot: cube, DPT 1->2 halfway: 1 tips up and away, 2 comes up fr
 # On flip's curve, a quarter of the turn is done at 0.35 of the switch.
 turn_case "screenshot: flip, DPT 1->2 a quarter in: the card tips over, its back (2) not drawn" \
 	flip 0.35 1000 1500
+
+# With var-eye-mm the eye is that far from the monitor, from its size in millimetres:
+# xrandr gave DPT 800x337 mm and HDT 300x530 mm, so at 600 mm it is 600 * 1440 / 337 px
+# from DPT, which turns up and down, and 600 * 1080 / 300 px from HDT, which turns
+# sideways. check-frames.py checks the perspective from var-d.
+mkdir -p "$OUT/eye/ws-direction/parts"
+cp "$OUT"/ws-direction/parts/*.conf "$OUT/eye/ws-direction/parts/"
+sed -i 's/^var-eye-mm = 0;/var-eye-mm = 600;/' "$OUT/eye/ws-direction/parts/box.conf"
+cp "$OUT/cube.conf" "$OUT/eye/cube.conf"
+rm -f "$OUT/frames-eye.csv"
+PICOM_DEBUG="frame_timing=$OUT/frames-eye.csv;frame_layout=1" start_picom "$OUT/eye/cube.conf" picom-eye
+i3cmd 'workspace 2:Web'
+i3cmd 'workspace 5:Music'
+sleep "$(pass_time 1 1.1)"
+i3cmd 'workspace 1:IDE'
+i3cmd 'workspace 3:Term'
+sleep "$(pass_time 1 1.1)"
+i3cmd 'focus output DPT'
+stop_picom
+eye_d=$(grep '^E,' "$OUT/frames-eye.csv" | grep -oE 'var-d=[0-9.]+' | sort -u | tr '\n' ' ')
+if [[ $eye_d == *"var-d=2563.8"* && $eye_d == *"var-d=2160 "* ]] &&
+	! grep '^E,' "$OUT/frames-eye.csv" | grep -oE 'var-d=[0-9.]+' | grep -qvE '^var-d=(2563\.8[0-9]*|2160)$'; then
+	pass "cube with var-eye-mm 600: the eye is 600 mm from each monitor ($eye_d)"
+else
+	fail "cube with var-eye-mm 600: the eye is 600 mm from each monitor" "var-d in the log: $eye_d"
+fi
+check_frames "  (frames: no jumps, in perspective from there)" "$OUT/frames-eye.csv"
 
 # styles/unfold.conf next to cube.conf: the overview opens the box of workspaces up into a
 # flat strip. Unfolded, DPT's workspaces lie in a column, edge to edge, together 92% of

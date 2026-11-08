@@ -191,8 +191,11 @@ change it in one place and styles that go together can't drift apart:
   [Workspaces a switch passes](#workspaces-a-switch-passes)), and what a switch is made
   of: `var-travel`, `var-face`, `var-start`, `var-end`, `var-time`, `var-pos`, `var-q`
   and `var-dip`.
-- `box.conf`, for cube, flip and unfold: `var-n` (the sides of the box) and `var-camera`
-  (how far the eye is, in sides), so the box that unfolds is the box that turns.
+- `box.conf`, for cube, flip and unfold: `var-n` (the sides of the box), `var-camera`
+  (how far the eye is, in sides) and `var-eye-mm` (how far your eyes are from the
+  monitor, in millimetres, for a perspective as you really see it, from the monitor's
+  size that RandR gives; 0, the default, uses `var-camera`), so the box that unfolds is
+  the box that turns.
 - `zoom.conf`, for the zoom styles and wall: `var-zoom` and `var-gap`, so the overview's
   strip is the one the switches pan along.
 - `overview.conf`, for wall and unfold: `var-fill` and `var-dim`.
