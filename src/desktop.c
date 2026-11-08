@@ -79,6 +79,10 @@ bool ws_desktop_viewport(unsigned desktop, int32_t *x, int32_t *y) {
 	return true;
 }
 
+bool ws_rect_has_point(struct ws_rect r, int32_t x, int32_t y) {
+	return r.x1 <= x && x < r.x2 && r.y1 <= y && y < r.y2;
+}
+
 /// Index of the monitor that contains a viewport. Returns -1 if there is no viewport, or
 /// it is not on any monitor. -1 stands for "all monitors".
 int ws_monitor_index(bool has_viewport, int32_t x, int32_t y) {
@@ -86,8 +90,7 @@ int ws_monitor_index(bool has_viewport, int32_t x, int32_t y) {
 		return -1;
 	}
 	for (int i = 0; i < wsd.n_monitors; i++) {
-		auto e = &wsd.monitors[i];
-		if (e->x1 <= x && x < e->x2 && e->y1 <= y && y < e->y2) {
+		if (ws_rect_has_point(wsd.monitors[i], x, y)) {
 			return i;
 		}
 	}
@@ -102,13 +105,13 @@ int ws_desktop_monitor(unsigned desktop) {
 }
 
 /// Ask for _NET_WM_DESKTOP of a window. Pair with ws_window_desktop_reply.
-xcb_get_property_cookie_t ws_window_desktop_request(xcb_window_t w) {
+static xcb_get_property_cookie_t ws_window_desktop_request(xcb_window_t w) {
 	return ws_prop_request(w, wsd.a_wm_desktop, XCB_ATOM_CARDINAL, 1);
 }
 
 /// Take the reply to ws_window_desktop_request. Returns -1 if the property is not set,
 /// or not a single desktop we know.
-int64_t ws_window_desktop_reply(xcb_get_property_cookie_t cookie) {
+static int64_t ws_window_desktop_reply(xcb_get_property_cookie_t cookie) {
 	auto prop = ws_prop_reply(cookie);
 	int64_t ret = -1;
 	if (prop != NULL && prop->format == 32) {
@@ -124,6 +127,81 @@ int64_t ws_window_desktop_reply(xcb_get_property_cookie_t cookie) {
 /// Read _NET_WM_DESKTOP of a window, in a round trip of its own.
 static int64_t ws_window_desktop(xcb_window_t w) {
 	return ws_window_desktop_reply(ws_window_desktop_request(w));
+}
+
+/// Ask for _NET_CLIENT_LIST. Pair with ws_read_clients.
+xcb_get_property_cookie_t ws_client_list_request(void) {
+	return ws_prop_request(wsd.root, wsd.a_client_list, XCB_ATOM_WINDOW, UINT32_MAX / 4);
+}
+
+/// Take the reply to ws_client_list_request, then read the desktop, the state and the
+/// place of every managed window, all in one more round trip.
+void ws_read_clients(xcb_get_property_cookie_t list_request) {
+	auto list = ws_prop_reply(list_request);
+	wsd.n_clients = 0;
+	if (list == NULL || list->format != 32) {
+		free(list);
+		return;
+	}
+	auto n = (unsigned)xcb_get_property_value_length(list) / 4;
+	const xcb_window_t *ids = xcb_get_property_value(list);
+	struct {
+		xcb_get_property_cookie_t desktop, state;
+		xcb_get_geometry_cookie_t geometry;
+		xcb_translate_coordinates_cookie_t origin;
+	} *requests = calloc(n, sizeof(*requests));
+	wsd.clients = realloc(wsd.clients, n * sizeof(*wsd.clients));
+	if (requests == NULL || wsd.clients == NULL) {
+		abort();
+	}
+	for (unsigned i = 0; i < n; i++) {
+		requests[i].desktop = ws_window_desktop_request(ids[i]);
+		requests[i].state =
+		    ws_prop_request(ids[i], wsd.a_wm_state, XCB_ATOM_ATOM, 64);
+		requests[i].geometry = xcb_get_geometry(wsd.c, ids[i]);
+		requests[i].origin = xcb_translate_coordinates(wsd.c, ids[i], wsd.root, 0, 0);
+	}
+
+	for (unsigned i = 0; i < n; i++) {
+		auto desktop = ws_window_desktop_reply(requests[i].desktop);
+		auto state = ws_prop_reply(requests[i].state);
+		if (state != NULL && state->format == 32) {
+			const xcb_atom_t *atoms = xcb_get_property_value(state);
+			auto n_atoms = xcb_get_property_value_length(state) / 4;
+			for (int j = 0; j < n_atoms; j++) {
+				if (atoms[j] == wsd.a_wm_state_hidden) {
+					desktop = -1;
+				}
+			}
+		}
+		free(state);
+		xcb_get_geometry_reply_t *g = ws_reply(requests[i].geometry.sequence);
+		xcb_translate_coordinates_reply_t *origin =
+		    ws_reply(requests[i].origin.sequence);
+		if (g != NULL && origin != NULL) {
+			wsd.clients[wsd.n_clients++] = (struct ws_client){
+			    .id = ids[i],
+			    .desktop = desktop,
+			    .rect = {.x1 = origin->dst_x,
+			             .y1 = origin->dst_y,
+			             .x2 = origin->dst_x + g->width,
+			             .y2 = origin->dst_y + g->height},
+			};
+		}
+		free(g);
+		free(origin);
+	}
+	free(requests);
+	free(list);
+}
+
+const struct ws_client *ws_find_client(xcb_window_t id) {
+	for (unsigned i = 0; i < wsd.n_clients; i++) {
+		if (wsd.clients[i].id == id) {
+			return &wsd.clients[i];
+		}
+	}
+	return NULL;
 }
 
 /// Ask for the root window properties, the screen size and the monitors. Pair with

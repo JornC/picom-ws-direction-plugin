@@ -5,19 +5,27 @@
 # Phase 1: a nested Xvfb with two monitors (DPT 3440x1440 at +0+480, HDT 1080x1920 at
 # +3440+0), stock i3, xterms on several workspaces, and picom with the plugin,
 # styles/slide.conf and debug logging. It runs i3 commands through i3-msg and checks
-# the direction that the plugin logs for every window that shows, opens or
-# hides. It also takes screenshots in the middle of slowed-down slides, to check the
-# slide style slides the right way and stays on its monitor. Then it runs picom with
+# the direction (and for some switches the distance and the other variables) that the
+# plugin logs for every window that shows, opens or hides. It also takes screenshots in
+# the middle of slowed-down slides, to check the slide style slides the right way and
+# stays on its monitor. Then it runs picom with
 # tests/picom-anim.conf, whose scripts don't read the variables, and checks the plugin
 # is loaded but never asked (the hook calls a provider only for scripts that read its
 # variable), and with a config without "open" animations to check the startup seed.
 # It also checks that the plugin's first log line is its version, and that make
 # uninstall removes what make install put in place.
 #
+# Phase 1 also starts a custom animation trigger over picom's D-Bus interface
+# (StartAnimations) on an xterm of a hidden workspace, and checks a screenshot shows it
+# while the animation runs, and that started right after a switch on the xterms of the
+# workspaces in between, it gets the switch.
+# The harness runs on a D-Bus session bus of its own.
+#
 # Phase 2: i3 is replaced by fakewm.c, a tiny stand-in window manager. It can spread one
 # workspace switch over several picom frames, and set up cases i3 won't produce on demand
 # (no _NET_DESKTOP_VIEWPORT, sticky windows, a window on the other monitor showing during
-# a switch).
+# a switch, a hidden tab and a window the window manager doesn't list showing during a
+# switch).
 #
 # Prints PASS/FAIL per case and exits 1 if any case failed. Everything runs on
 # $WSDIR_DISPLAY (default :91), never on the real display, and only processes started
@@ -29,12 +37,24 @@
 #
 # Usage: make && tests/run.sh
 # Environment: PICOM (picom binary, default: picom on the PATH; it must have the
-# animation variable hook), I3 (default /usr/bin/i3), WSDIR_DISPLAY (default
-# :91), WSDIR_WORK (directory for the i3 socket and logs, default
+# animation variable hook and custom animation triggers), I3 (default /usr/bin/i3),
+# WSDIR_DISPLAY (default :91), WSDIR_WORK (directory for the i3 socket and logs, default
 # $XDG_RUNTIME_DIR/wsdir-<display number>), WSDIR_SETTLE (seconds to wait after each
 # step, default 0.7), WSDIR_PLUGIN (the plugin, default build/ws-direction.so).
+# $XDG_RUNTIME_DIR/wsdir-<display number>, or /tmp/wsdir-<display number> without
+# XDG_RUNTIME_DIR), WSDIR_SETTLE (seconds to wait after each step, default 0.7),
+# WSDIR_PLUGIN (the plugin, default build/ws-direction.so).
 
 set -u
+
+# picom's D-Bus interface goes on a session bus of our own.
+if [[ -z ${WSDIR_OWN_BUS:-} ]]; then
+	command -v dbus-run-session >/dev/null || {
+		echo "ERROR: missing tool: dbus-run-session" >&2
+		exit 2
+	}
+	WSDIR_OWN_BUS=1 exec dbus-run-session -- "$0" "$@"
+fi
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
@@ -61,7 +81,8 @@ die() {
 [[ $DISP != ":0" ]] || die "refusing to run on the real display :0"
 [[ ${#SOCK} -le 107 ]] || die "socket path too long (${#SOCK} bytes): $SOCK"
 [[ -n $PICOM && -x $PICOM ]] || die "picom not found, set PICOM"
-for tool in "$I3" Xvfb xrandr i3-msg xterm xdotool xprop import magick cc pkg-config; do
+for tool in "$I3" Xvfb xrandr i3-msg xterm xdotool xprop import magick cc pkg-config \
+	dbus-send; do
 	command -v "$tool" >/dev/null || die "missing tool: $tool"
 done
 [[ ! -e /tmp/.X${DISP#:}-lock ]] || die "display $DISP is already in use"
@@ -84,6 +105,36 @@ PLUGIN=$(realpath "$PLUGIN")
 	echo '});'
 } >"$OUT/wsdir-plugin.conf"
 CONFIG=$OUT/wsdir-plugin.conf
+# A custom trigger that draws a window, hidden or not, for 2 s, cropped to the monitor
+# the plugin gives. Normal windows keep their image while hidden. Shows and hides read a
+# variable of the plugin, as a style does, so the plugin sees each workspace switch when
+# it happens.
+{
+	echo "plugins = \"$PLUGIN\";"
+	echo 'backend = "glx";'
+	echo 'vsync = true;'
+	echo 'use-damage = true;'
+	echo 'unredir-if-possible = false;'
+	echo 'animation-triggers = ["wave"];'
+	cat <<'EOF'
+rules = ({
+  match = "!override_redirect && window_type = 'normal'";
+  keep-image-when-hidden = true;
+  animations = ({
+    triggers = ["wave"];
+    opacity = "window-mapped-opacity";
+    crop-x = "plugin-ws-direction-monitor-x";
+    crop-y = "plugin-ws-direction-monitor-y";
+    crop-width = "plugin-ws-direction-monitor-width";
+    crop-height = "plugin-ws-direction-monitor-height";
+    offset-x = { duration = 2; start = 0; end = 0; };
+  }, {
+    triggers = ["show", "hide"];
+    offset-x = { duration = "0.05 + 0 * plugin-ws-direction-direction"; start = 0; end = 0; };
+  });
+});
+EOF
+} >"$OUT/wave.conf"
 
 # --- process handling: only ever stop PIDs started here ---
 
@@ -176,7 +227,7 @@ start_picom() {
 	LOG=$OUT/$2.log
 	# The plugin logs its decisions into picom's log, in the same format.
 	export WS_DIRECTION_LOG=$LOG
-	run_bg "$OUT/$2.out" "$PICOM" --config "$1" --log-level debug --log-file "$LOG"
+	run_bg "$OUT/$2.out" "$PICOM" --config "$1" --dbus --log-level debug --log-file "$LOG"
 	PICOM_PID=$LAST_PID
 	wait_until 15 grep -q "Screen redirected" "$LOG" || die "picom did not start, see $OUT/$2.out"
 	sleep 1
@@ -211,6 +262,26 @@ directions_since() {
 		sed -E 's/ open / show /' | sort -u
 }
 
+# The same for the distances, one "title trigger distance" per line.
+distances_since() {
+	tail -n +"$(($1 + 1))" "$LOG" |
+		sed -nE 's/.*\] (open|show|hide) of window 0x[0-9a-f]+ \((.*)\): direction = .*, distance ([0-9]+), .*/\2 \1 \3/p' |
+		sed -E 's/ open / show /' | sort -u
+}
+
+# All variables picom got after line $1 for the triggers that match $2, one "title
+# trigger direction D distance N face F/FACES selected S placed P monitor X,Y WxH" per
+# line.
+variables_since() {
+	tail -n +"$(($1 + 1))" "$LOG" |
+		sed -nE 's/.*\] ('"$2"') of window 0x[0-9a-f]+ \((.*)\): direction = (-?[0-9]+) \(.*\), distance ([0-9]+), face (-?[0-9]+) of ([0-9]+), selected ([01]), placed ([01]), monitor ([0-9]+,[0-9]+ [0-9]+x[0-9]+), .*/\2 \1 direction \3 distance \4 face \5\/\6 selected \7 placed \8 monitor \9/p' |
+		sed -E 's/ open / show /' | sort -u
+}
+
+# The monitors, as variables_since prints them.
+DPT_RECT="monitor 0,480 3440x1440"
+HDT_RECT="monitor 3440,0 1080x1920"
+
 # expect NAME [none | "title trigger direction"...]: compare $GOT with the expectation.
 # The logged set must match exactly: no missing and no extra windows.
 expect() {
@@ -229,25 +300,39 @@ expect() {
 
 # i3_case NAME I3-COMMAND EXPECTATION...
 i3_case() {
-	local name=$1 cmd=$2 mark
+	local name=$1 cmd=$2
 	shift 2
-	mark=$(log_mark)
+	CASE_MARK=$(log_mark)
 	i3cmd "$cmd"
 	sleep "$SETTLE"
-	GOT=$(directions_since "$mark")
+	GOT=$(directions_since "$CASE_MARK")
 	expect "$name" "$@"
 }
 
 # fake_case NAME "FAKEWM STEPS" EXPECTATION...
 fake_case() {
-	local name=$1 steps=$2 mark
+	local name=$1 steps=$2
 	shift 2
-	mark=$(log_mark)
+	CASE_MARK=$(log_mark)
 	# shellcheck disable=SC2086
 	fakewm $steps
 	sleep "$SETTLE"
-	GOT=$(directions_since "$mark")
+	GOT=$(directions_since "$CASE_MARK")
 	expect "$name" "$@"
+}
+
+# distances NAME EXPECTATION...: check the distances of the case before, as "title
+# trigger distance".
+distances() {
+	GOT=$(distances_since "$CASE_MARK")
+	expect "$@"
+}
+
+# variables NAME EXPECTATION...: check all variables of the shows, opens and hides of the
+# case before, as variables_since prints them.
+variables() {
+	GOT=$(variables_since "$CASE_MARK" 'open|show|hide')
+	expect "$@"
 }
 
 # Time (ms since midnight) of the first log line after line $1 that matches $2.
@@ -281,6 +366,9 @@ fi
 if grep -q "plugin API is not compatible" "$OUT/diagnostics.out"; then
 	die "this picom has no animation variable hook (plugin API 0.2), see $OUT/diagnostics.out"
 fi
+"$PICOM" --config "$OUT/wave.conf" --diagnostics >"$OUT/diagnostics-wave.out" 2>&1
+grep -qx "  - wave" "$OUT/diagnostics-wave.out" ||
+	die "this picom has no custom animation triggers, see $OUT/diagnostics-wave.out"
 # make uninstall takes away what make install put there.
 # Only what this run installs, not files an earlier run left there.
 rm -rf "$OUT/installed"
@@ -363,30 +451,54 @@ i3_case "HDT 5->3 while the focus is on DPT, first switch after picom started" \
 i3_case "focus moves to the other monitor: no animation" \
 	'focus output DPT' none
 i3_case "DPT 1->2" 'workspace 2:Web' "ws1-a hide 1" "ws1-b hide 1" "ws2-a show 1"
+distances "  (distance 1)" "ws1-a hide 1" "ws1-b hide 1" "ws2-a show 1"
 i3_case "DPT 2->1" 'workspace 1:IDE' "ws2-a hide -1" "ws1-a show -1" "ws1-b show -1"
 i3_case "DPT 1->4 (no wrap-around guessing)" 'workspace 4:Misc' \
 	"ws1-a hide 1" "ws1-b hide 1" "ws4-a show 1"
+distances "  (distance 2: it passes 2, and 3 is on HDT)" \
+	"ws1-a hide 2" "ws1-b hide 2" "ws4-a show 2"
+variables "  (faces: 1 leaves from face 0, 4 arrives from face 2 of DPT's 6)" \
+	"ws1-a hide direction 1 distance 2 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-b hide direction 1 distance 2 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a show direction 1 distance 2 face 2/6 selected 1 placed 1 $DPT_RECT"
 i3_case "DPT 4->1" 'workspace 1:IDE' "ws4-a hide -1" "ws1-a show -1" "ws1-b show -1"
 i3_case "HDT 3->5" 'workspace 5:Music' "ws3-a hide 1" "ws5-a show 1"
+distances "  (distance 1: 4 is on DPT)" "ws3-a hide 1" "ws5-a show 1"
 i3_case "HDT 5->3" 'workspace 3:Term' "ws5-a hide -1" "ws3-a show -1"
 i3_case "focus moves to the other monitor by switching to its visible workspace" \
 	'workspace 1:IDE' none
 i3_case "DPT 1->7" 'workspace 7:Extra' "ws1-a hide 1" "ws1-b hide 1" "ws7-a show 1"
+distances "  (distance 3: it passes 2 and 4)" "ws1-a hide 3" "ws1-b hide 3" "ws7-a show 3"
+variables "  (faces: 7 arrives from face 3)" \
+	"ws1-a hide direction 1 distance 3 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-b hide direction 1 distance 3 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws7-a show direction 1 distance 3 face 3/6 selected 1 placed 1 $DPT_RECT"
 i3_case "HDT 3->5 while the focus is on DPT showing 7" \
 	'workspace 5:Music' "ws3-a hide 1" "ws5-a show 1"
+variables "  (faces of HDT, which now has the focus)" \
+	"ws3-a hide direction 1 distance 1 face 0/2 selected 1 placed 1 $HDT_RECT" \
+	"ws5-a show direction 1 distance 1 face 1/2 selected 1 placed 1 $HDT_RECT"
 i3_case "DPT 7->1 while the focus is on HDT" \
 	'workspace 1:IDE' "ws7-a hide -1" "ws1-a show -1" "ws1-b show -1"
+distances "  (distance 3)" "ws7-a hide 3" "ws1-a show 3" "ws1-b show 3"
+variables "  (faces: 1 arrives from face -3)" \
+	"ws7-a hide direction -1 distance 3 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-a show direction -1 distance 3 face -3/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-b show direction -1 distance 3 face -3/6 selected 1 placed 1 $DPT_RECT"
 i3_case "HDT 5->3 while the focus is on DPT showing 1" \
 	'workspace 3:Term' "ws5-a hide -1" "ws3-a show -1"
 i3_case "focus back to DPT: no animation" 'focus output DPT' none
 i3_case "DPT 1->8, an empty workspace: the outgoing windows get the sign" \
 	'workspace 8' "ws1-a hide 1" "ws1-b hide 1"
+distances "  (distance 4: it passes 2, 4 and 7)" "ws1-a hide 4" "ws1-b hide 4"
 i3_case "DPT 8->1, the empty workspace is removed" \
 	'workspace 1:IDE' "ws1-a show -1" "ws1-b show -1"
+distances "  (distance 4, also with 8 gone)" "ws1-a show 4" "ws1-b show 4"
 i3_case "DPT 1->6, an empty workspace" 'workspace 6' "ws1-a hide 1" "ws1-b hide 1"
 before=$(current_desktop)
 i3_case "DPT 6->7: 6 is removed, so only _NET_DESKTOP_NAMES changes" \
 	'workspace 7:Extra' "ws7-a show 1"
+distances "  (distance 1)" "ws7-a show 1"
 after=$(current_desktop)
 if [[ -n $before && $before == "$after" ]]; then
 	pass "  (_NET_CURRENT_DESKTOP really stayed $before in the case above)"
@@ -399,11 +511,21 @@ i3_case "DPT back_and_forth (2->1)" 'workspace back_and_forth' \
 	"ws2-a hide -1" "ws1-a show -1" "ws1-b show -1"
 i3_case "two switches in one i3 command, DPT 1->2->4" 'workspace 2:Web; workspace 4:Misc' \
 	"ws1-a hide 1" "ws1-b hide 1" "ws4-a show 1"
+distances "  (distance 2: picom only sees 1->4)" "ws1-a hide 2" "ws1-b hide 2" "ws4-a show 2"
 i3_case "DPT 4->1" 'workspace 1:IDE' "ws4-a hide -1" "ws1-a show -1" "ws1-b show -1"
 i3_case "move a window to another workspace: 0" \
 	'[title="^ws1-b$"] move container to workspace 4:Misc' "ws1-b hide 0"
+distances "  (distance 0)" "ws1-b hide 0"
 i3_case "move it back to the visible workspace: 0" \
 	'[title="^ws1-b$"] move container to workspace 1:IDE' "ws1-b show 0"
+# i3 doesn't place the windows of a hidden workspace, so the window stays on DPT.
+i3_case "move a window to a hidden workspace of the other monitor: 0" \
+	'[title="^ws1-b$"] move container to workspace 5:Music' "ws1-b hide 0"
+variables "  (HDT's monitor and faces, not selected, and not placed: it is still on DPT)" \
+	"ws1-b hide direction 0 distance 0 face 1/2 selected 0 placed 0 $HDT_RECT"
+i3_case "move it back: 0" '[title="^ws1-b$"] move container to workspace 1:IDE' "ws1-b show 0"
+variables "  (placed on DPT again)" \
+	"ws1-b show direction 0 distance 0 face 0/6 selected 1 placed 1 $DPT_RECT"
 i3_case "scratchpad show: 0" '[instance="^scratch$"] scratchpad show' "scratch show 0"
 i3_case "scratchpad hide: 0" '[instance="^scratch$"] scratchpad show' "scratch hide 0"
 i3_case "fullscreen on hides the sibling: 0" '[title="^ws1-a$"] fullscreen enable' \
@@ -421,10 +543,19 @@ sleep "$SETTLE"
 
 i3_case "DPT 1->Notes: names without a number sort after numbered ones" \
 	'workspace Notes' "ws1-a hide 1" "ws1-b hide 1" "notes-a show 1"
+distances "  (distance 4: it passes 2, 4 and 7)" "ws1-a hide 4" "ws1-b hide 4" "notes-a show 4"
+# The new workspace 6 moves Notes and Alpha down in _NET_DESKTOP_NAMES, while DPT shows
+# Notes.
+i3_case "move a hidden window to the new workspace 6: no animation" \
+	'[title="^ws1-b$"] move container to workspace 6' none
 i3_case "DPT Notes->Alpha: Alpha comes later in _NET_DESKTOP_NAMES" \
 	'workspace Alpha' "notes-a hide 1" "alpha-a show 1"
+distances "  (distance 1: Notes moved in the list, and is not counted as in between)" \
+	"notes-a hide 1" "alpha-a show 1"
 i3_case "DPT Alpha->Notes" 'workspace Notes' "alpha-a hide -1" "notes-a show -1"
 i3_case "DPT Notes->7" 'workspace 7:Extra' "notes-a hide -1" "ws7-a show -1"
+i3_case "move it back, and 6 goes away: no animation" \
+	'[title="^ws1-b$"] move container to workspace 1:IDE' none
 i3_case "DPT 7->1" 'workspace 1:IDE' "ws7-a hide -1" "ws1-a show -1" "ws1-b show -1"
 
 # fast_case NAME SIGN FIRST LAST GAP: switch DPT through FIRST and two more workspaces
@@ -541,6 +672,77 @@ stop "$HANG_PID"
 i3cmd 'focus output DPT'
 
 stop_picom
+
+# start_wave WINDOW...: start the custom trigger "wave" on these windows over D-Bus, and
+# put picom's reply in $reply.
+start_wave() {
+	local ids
+	ids=$(IFS=,; echo "$*")
+	reply=$(dbus-send --print-reply --dest="com.github.chjj.compton.${DISP//[^[:alnum:]]/_}" \
+		/com/github/chjj/compton picom.Compositor.StartAnimations string:wave \
+		"array:uint32:$ids" 2>&1)
+}
+
+# A custom trigger started over D-Bus draws an xterm of a hidden workspace. ws2-a (blue)
+# is shown once under this picom, so it has an image to keep, and so is ws4-a. Then DPT
+# shows the empty workspace 8, so nothing else is drawn where ws2-a would be.
+start_picom "$OUT/wave.conf" picom-wave
+i3cmd 'workspace 4:Misc'
+sleep "$SETTLE"
+i3cmd 'workspace 2:Web'
+sleep "$SETTLE"
+mark=$(log_mark)
+i3cmd 'workspace 8'
+sleep "$SETTLE"
+WS2=$(win_id ws2-a)
+kept=$(tail -n +"$((mark + 1))" "$LOG" | grep -c "Keeping the image of window .* (ws2-a)")
+import -window root "$OUT/shot.png"
+before=$(pixel 1720 1200)
+mark=$(log_mark)
+start_wave "$WS2"
+sleep 0.7
+import -window root "$OUT/shot.png"
+cp "$OUT/shot.png" "$OUT/shot-wave.png"
+during=$(pixel 1720 1200)
+sleep 2
+import -window root "$OUT/shot.png"
+after=$(pixel 1720 1200)
+asked=$(tail -n +"$((mark + 1))" "$LOG" |
+	grep -c "wave of window 0x[0-9a-f]* (ws2-a): direction = 0 ")
+if ((kept == 1)) && [[ $reply == *"uint32 1"* && $before != "#0000FF" &&
+	$during == "#0000FF" && $after != "#0000FF" ]]; then
+	pass "screenshot: StartAnimations draws a hidden xterm only while its animation runs"
+else
+	fail "screenshot: StartAnimations draws a hidden xterm only while its animation runs" \
+		"kept $kept, reply: ${reply//$'\n'/ }" \
+		"pixel before $before, during $during, after $after"
+fi
+if ((asked == 1)); then
+	pass "  (the plugin is asked once for the custom trigger, by its name)"
+else
+	fail "  (the plugin is asked once for the custom trigger, by its name)" \
+		"$asked decision lines for wave of ws2-a, see $LOG"
+fi
+GOT=$(variables_since "$mark" wave)
+expect "  (not part of a switch: face -3 from 8, which DPT shows, of its 7)" \
+	"ws2-a wave direction 0 distance 0 face -3/7 selected 1 placed 1 $DPT_RECT"
+i3cmd 'workspace 1:IDE'
+sleep "$SETTLE"
+# Started right after a switch, on the xterms of the workspaces it passes: they get the
+# switch, and their place between the two.
+mark=$(log_mark)
+i3cmd 'workspace 7:Extra'
+start_wave "$WS2" "$(win_id ws4-a)"
+sleep "$SETTLE"
+GOT=$(variables_since "$mark" wave)
+expect "StartAnimations right after DPT 1->7: 2 and 4 in between get the switch" \
+	"ws2-a wave direction 1 distance 3 face 1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a wave direction 1 distance 3 face 2/6 selected 1 placed 1 $DPT_RECT"
+sleep 2
+i3cmd 'workspace 1:IDE'
+sleep "$SETTLE"
+stop_picom
+
 # The plugin is loaded here too. The hook calls a provider only when an
 # animation starts whose script reads its variable, and no script here reads one. So
 # animations must start, and the plugin must never be asked: no decision line anywhere
@@ -588,17 +790,18 @@ sleep 0.5
 # --- phase 2: fake window manager ---
 
 echo "== phase 2: fake window manager"
-# Desktops 1:A and 2:B are on DPT, 3:C and 4:D on HDT. fs is on all desktops.
+# Desktops 1:A and 2:B are on DPT, 3:C and 4:D on HDT. fs is on all desktops. fu is on 2:B,
+# but the window manager doesn't list it in _NET_CLIENT_LIST.
 for spec in fa:+100+600 fb:+100+1000 fb2:+800+1000 fc:+3600+100 fc2:+3600+500 \
-	fd:+3600+900 fs:+1500+600; do
+	fd:+3600+900 fs:+1500+600 fu:+800+600; do
 	start_xterm fake "${spec%%:*}" -geometry "40x10${spec#*:}"
 done
 FA=$(win_id fa) FB=$(win_id fb) FB2=$(win_id fb2) FC=$(win_id fc) FC2=$(win_id fc2)
-FD=$(win_id fd) FS=$(win_id fs)
+FD=$(win_id fd) FS=$(win_id fs) FU=$(win_id fu)
 # DPT shows 1:A (fa, and the sticky fs), HDT shows 3:C (fc).
 fakewm names 1:A,2:B,3:C,4:D viewport 0,480,0,480,3440,0,3440,0 current 0 \
-	desktop "$FA" 0 desktop "$FB" 1 desktop "$FB2" 1 desktop "$FC" 2 desktop "$FC2" 2 \
-	desktop "$FD" 3 desktop "$FS" sticky unmap "$FB" unmap "$FB2" unmap "$FC2" unmap "$FD"
+	clients "$FA:0,$FB:1,$FB2:1,$FC:2,$FC2:2,$FD:3,$FS:sticky" desktop "$FU" 1 \
+	unmap "$FB" unmap "$FB2" unmap "$FC2" unmap "$FD" unmap "$FU"
 
 start_picom "$CONFIG" picom-fake
 mark=$(log_mark)
@@ -618,10 +821,32 @@ fi
 fake_case "DPT 2:B->1:A while a window on HDT (no switch there) shows: it gets 0" \
 	"current 0 sleep 30 map $FA sleep 30 unmap $FB unmap $FB2 map $FC2" \
 	"fa show -1" "fb hide -1" "fb2 hide -1" "fc2 show 0"
+variables "  (faces; the window on HDT is not selected)" \
+	"fa show direction -1 distance 1 face -1/2 selected 1 placed 1 $DPT_RECT" \
+	"fb hide direction -1 distance 1 face 0/2 selected 1 placed 1 $DPT_RECT" \
+	"fb2 hide direction -1 distance 1 face 0/2 selected 1 placed 1 $DPT_RECT" \
+	"fc2 show direction 0 distance 0 face 0/2 selected 0 placed 1 $HDT_RECT"
 fake_case "a sticky window that hides during a switch gets 0" \
 	"current 1 map $FB unmap $FA unmap $FS" "fb show 1" "fa hide 1" "fs hide 0"
+variables "  (the sticky window is on no workspace: face 0, the monitor it is on)" \
+	"fb show direction 1 distance 1 face 1/2 selected 1 placed 1 $DPT_RECT" \
+	"fa hide direction 1 distance 1 face 0/2 selected 1 placed 1 $DPT_RECT" \
+	"fs hide direction 0 distance 0 face 0/2 selected 1 placed 1 $DPT_RECT"
 fake_case "DPT 2:B->1:A with the map 40 ms before the root change, and the unmap 40 ms after" \
 	"map $FA sleep 40 current 0 sleep 40 unmap $FB" "fa show -1" "fb hide -1"
+fakewm hidden "$FB2" 1
+fake_case "a hidden tab and a window the window manager doesn't list show during a switch: 0" \
+	"current 1 map $FB map $FB2 map $FU unmap $FA" "fb show 1" "fb2 show 0" "fu show 0" \
+	"fa hide 1"
+variables "  (they are on no workspace: face 0, the monitor they are on)" \
+	"fb show direction 1 distance 1 face 1/2 selected 1 placed 1 $DPT_RECT" \
+	"fb2 show direction 0 distance 0 face 0/2 selected 1 placed 1 $DPT_RECT" \
+	"fu show direction 0 distance 0 face 0/2 selected 1 placed 1 $DPT_RECT" \
+	"fa hide direction 1 distance 1 face 0/2 selected 1 placed 1 $DPT_RECT"
+fakewm hidden "$FB2" 0
+fake_case "DPT 2:B->1:A, the tab is no longer hidden" \
+	"current 0 map $FA unmap $FB unmap $FB2 unmap $FU" "fa show -1" "fb hide -1" \
+	"fb2 hide -1" "fu hide 0"
 fake_case "HDT 3:C->4:D" \
 	"current 3 map $FD unmap $FC unmap $FC2" "fd show 1" "fc hide 1" "fc2 hide 1"
 stop_picom
@@ -633,6 +858,10 @@ fakewm noviewport current 0 map "$FA" unmap "$FB" unmap "$FC" unmap "$FC2" unmap
 start_picom "$CONFIG" picom-noviewport
 fake_case "no _NET_DESKTOP_VIEWPORT: every desktop spans all monitors, 1:A->3:C" \
 	"current 2 sleep 30 map $FC sleep 30 unmap $FA" "fc show 1" "fa hide 1"
+distances "  (distance 2: without viewports 2:B counts too)" "fc show 2" "fa hide 2"
+variables "  (the whole screen, with all 4 faces)" \
+	"fc show direction 1 distance 2 face 2/4 selected 1 placed 1 monitor 0,0 4520x1920" \
+	"fa hide direction 1 distance 2 face 0/4 selected 1 placed 1 monitor 0,0 4520x1920"
 stop_picom
 
 # Errors from before picom opens its log file (config, plugins, script compiling) are in
@@ -647,7 +876,7 @@ fi
 
 # Every script in the other configs reads the variables, so picom must have asked
 # the plugin at every animation start, and never otherwise. The plugin works out
-# all five variables at the first call for a window in a frame: one decision line
+# all of its variables at the first call for a window in a frame: one decision line
 # per start.
 counts=
 bad=0

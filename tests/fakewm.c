@@ -10,11 +10,15 @@
 //   noviewport            delete _NET_DESKTOP_VIEWPORT
 //   current N             set _NET_CURRENT_DESKTOP
 //   desktop WIN N|sticky  set _NET_WM_DESKTOP on a window
+//   clients WIN:N,...     set _NET_CLIENT_LIST to these windows, and _NET_WM_DESKTOP on
+//                         each one (N is a desktop or sticky)
+//   hidden WIN 1|0        set or remove _NET_WM_STATE_HIDDEN on a window
 //   map WIN / unmap WIN   map or unmap a window
 //   sleep MS              wait
 //
 // Build: cc -o fakewm fakewm.c $(pkg-config --cflags --libs xcb)
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +51,42 @@ static void set_cardinals(xcb_window_t w, const char *prop, const char *list) {
 	free(copy);
 	xcb_change_property(c, XCB_PROP_MODE_REPLACE, w, atom(prop), XCB_ATOM_CARDINAL,
 	                    32, n, values);
+}
+
+static void set_desktop(xcb_window_t w, const char *desktop) {
+	set_cardinals(w, "_NET_WM_DESKTOP",
+	              strcmp(desktop, "sticky") == 0 ? "0xFFFFFFFF" : desktop);
+}
+
+static void set_clients(const char *list) {
+	xcb_window_t ids[256];
+	uint32_t n = 0;
+	char *copy = strdup(list), *save = NULL;
+	// set_desktop uses strtok.
+	for (char *tok = strtok_r(copy, ",", &save); tok != NULL && n < 256;
+	     tok = strtok_r(NULL, ",", &save)) {
+		char *desktop = strchr(tok, ':');
+		if (desktop == NULL) {
+			fprintf(stderr, "fakewm: clients needs WIN:DESKTOP, not %s\n", tok);
+			exit(1);
+		}
+		*desktop++ = '\0';
+		ids[n] = (xcb_window_t)strtoul(tok, NULL, 0);
+		set_desktop(ids[n++], desktop);
+	}
+	free(copy);
+	xcb_change_property(c, XCB_PROP_MODE_REPLACE, root, atom("_NET_CLIENT_LIST"),
+	                    XCB_ATOM_WINDOW, 32, n, ids);
+}
+
+static void set_hidden(xcb_window_t w, bool hidden) {
+	if (hidden) {
+		xcb_atom_t state = atom("_NET_WM_STATE_HIDDEN");
+		xcb_change_property(c, XCB_PROP_MODE_REPLACE, w, atom("_NET_WM_STATE"),
+		                    XCB_ATOM_ATOM, 32, 1, &state);
+	} else {
+		xcb_delete_property(c, w, atom("_NET_WM_STATE"));
+	}
 }
 
 static void set_names(const char *list) {
@@ -96,9 +136,12 @@ int main(int argc, char **argv) {
 			set_cardinals(root, "_NET_CURRENT_DESKTOP", next(argc, argv, &i));
 		} else if (strcmp(step, "desktop") == 0) {
 			xcb_window_t w = (xcb_window_t)strtoul(next(argc, argv, &i), NULL, 0);
-			const char *d = next(argc, argv, &i);
-			set_cardinals(w, "_NET_WM_DESKTOP",
-			              strcmp(d, "sticky") == 0 ? "0xFFFFFFFF" : d);
+			set_desktop(w, next(argc, argv, &i));
+		} else if (strcmp(step, "clients") == 0) {
+			set_clients(next(argc, argv, &i));
+		} else if (strcmp(step, "hidden") == 0) {
+			xcb_window_t w = (xcb_window_t)strtoul(next(argc, argv, &i), NULL, 0);
+			set_hidden(w, strcmp(next(argc, argv, &i), "1") == 0);
 		} else if (strcmp(step, "map") == 0) {
 			xcb_map_window(
 			    c, (xcb_window_t)strtoul(next(argc, argv, &i), NULL, 0));

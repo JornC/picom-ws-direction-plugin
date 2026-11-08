@@ -2,22 +2,47 @@
 // Copyright (c) JornC
 
 /// picom plugin that works out the direction of a workspace switch, so animation scripts
-/// can slide windows the right way, and the monitor of a window's workspace, so they can
-/// crop to it. Animation variables:
+/// can slide windows the right way, the monitor of a window's workspace, so they can
+/// crop to it, and where the window's workspace is among the monitor's workspaces, so
+/// they can draw the workspaces a switch passes. Animation variables:
 ///
 ///   plugin-ws-direction-direction
 ///       1 if the new workspace sorts after the old one, -1 if before, 0 if the
-///       animation was not caused by a workspace switch on the window's monitor.
+///       animation is not part of a workspace switch on the window's monitor.
+///   plugin-ws-direction-distance
+///       how many of the monitor's workspaces the switch moved: 1 to the next one, 2 when
+///       it passes one, and so on. Only workspaces that exist count. 0 when the direction
+///       is 0.
 ///   plugin-ws-direction-monitor-x/y/width/height
-///       the monitor that shows the window's workspace. For other windows and triggers:
-///       the monitor that fully contains the window, else the whole screen (like
-///       window-monitor-*). For a window that closes: always the whole screen, as the
-///       window is gone and can't be looked up; use window-monitor-* there.
+///       the monitor that shows the window's workspace, also while the workspace is
+///       hidden. For a window that is not on one workspace: the monitor that fully
+///       contains the window, else the whole screen (like window-monitor-*). For a window
+///       that closes: always the whole screen, as the window is gone and can't be looked
+///       up; use window-monitor-* there.
+///   plugin-ws-direction-faces
+///       how many workspaces that monitor has.
+///   plugin-ws-direction-face
+///       how many of the monitor's workspaces the window's workspace is away from the
+///       reference workspace, counted like distance: positive if it sorts after it,
+///       negative if before. The reference workspace is the one the monitor showed before
+///       the switch, or the one it shows now if the animation is not part of a switch. So
+///       in a switch the windows that leave have 0 and the windows that arrive have
+///       direction * distance. 0 for a window that is not on one workspace.
+///   plugin-ws-direction-selected
+///       1 if that monitor shows the current workspace (_NET_CURRENT_DESKTOP), else 0.
+///   plugin-ws-direction-placed
+///       0 if the window is on one workspace but its centre is not on that workspace's
+///       monitor, else 1. A window keeps its place while its workspace is hidden, also
+///       when it is moved to a workspace of another monitor.
+///
+/// A window is on one workspace if the window manager lists it in _NET_CLIENT_LIST, its
+/// _NET_WM_DESKTOP names one desktop, and it doesn't have _NET_WM_STATE_HIDDEN (i3 sets
+/// that on a tab that isn't the selected one; it would not be seen on its workspace).
 ///
 /// For workspaces it only uses EWMH data the window manager already sets:
-/// _NET_CURRENT_DESKTOP, _NET_DESKTOP_NAMES and _NET_DESKTOP_VIEWPORT on the root window,
-/// and _NET_WM_DESKTOP on client windows. Monitors come from RandR, a window's place from
-/// GetGeometry.
+/// _NET_CURRENT_DESKTOP, _NET_DESKTOP_NAMES, _NET_DESKTOP_VIEWPORT and _NET_CLIENT_LIST
+/// on the root window, and _NET_WM_DESKTOP and _NET_WM_STATE on client windows. Monitors
+/// come from RandR, a window's place from GetGeometry and TranslateCoordinates.
 ///
 /// The order in which a window manager changes these properties and maps and unmaps
 /// windows is not specified, and those changes can reach picom over several frames. So we
@@ -37,11 +62,13 @@
 /// last workspace we saw: back to that workspace gives 0; elsewhere the windows that
 /// show get the sign relative to it, and the windows that hide get 0.
 ///
-/// Each animation start costs one round trip to the X server, on picom's main thread.
-/// Usually that is well under a millisecond, but the reply waits behind whatever the
-/// server is doing (other clients, the window manager's own burst of requests during a
-/// switch, picom's drawing of the previous frame). The first start in a frame can then
-/// wait tens of milliseconds, for example when many windows open at once.
+/// The first animation start in a frame costs two round trips to the X server, on picom's
+/// main thread: one for the root window and the list of managed windows, one for the
+/// desktop, state and place of each managed window. Later starts in the same frame cost
+/// none, except for a window the window manager doesn't manage: one more for its place.
+/// Usually a round trip is well under a millisecond, but the reply waits behind whatever
+/// the server is doing (other clients, the window manager's own burst of requests during
+/// a switch, picom's drawing of the previous frame), so it can take tens of milliseconds.
 ///
 /// We connect to the display named by DISPLAY, like picom itself. The variables are only
 /// added once the X connection is up. Without it, every animation whose script reads
@@ -64,9 +91,16 @@
 #include "ws_direction.h"
 
 static const char *const ws_variable_names[] = {
-    [WS_VAR_DIRECTION] = "direction",           [WS_VAR_MONITOR_X] = "monitor-x",
-    [WS_VAR_MONITOR_Y] = "monitor-y",           [WS_VAR_MONITOR_WIDTH] = "monitor-width",
+    [WS_VAR_DIRECTION] = "direction",
+    [WS_VAR_DISTANCE] = "distance",
+    [WS_VAR_MONITOR_X] = "monitor-x",
+    [WS_VAR_MONITOR_Y] = "monitor-y",
+    [WS_VAR_MONITOR_WIDTH] = "monitor-width",
     [WS_VAR_MONITOR_HEIGHT] = "monitor-height",
+    [WS_VAR_FACES] = "faces",
+    [WS_VAR_FACE] = "face",
+    [WS_VAR_SELECTED] = "selected",
+    [WS_VAR_PLACED] = "placed",
 };
 static_assert(sizeof(ws_variable_names) / sizeof(ws_variable_names[0]) == WS_N_VARIABLES,
               "every variable needs a name");
@@ -162,6 +196,9 @@ __attribute__((constructor)) static void ws_init(void) {
 	wsd.a_wm_desktop = ws_atom("_NET_WM_DESKTOP");
 	wsd.a_utf8_string = ws_atom("UTF8_STRING");
 	wsd.a_net_wm_name = ws_atom("_NET_WM_NAME");
+	wsd.a_client_list = ws_atom("_NET_CLIENT_LIST");
+	wsd.a_wm_state = ws_atom("_NET_WM_STATE");
+	wsd.a_wm_state_hidden = ws_atom("_NET_WM_STATE_HIDDEN");
 
 	// Learn what each monitor shows now, before the first switch.
 	wsd.frame_time_us = ws_now_us();

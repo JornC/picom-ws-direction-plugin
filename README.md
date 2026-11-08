@@ -2,10 +2,12 @@
 
 A [picom](https://github.com/yshui/picom) plugin that tells animation scripts which way a
 workspace switch went, and which monitor a window's workspace is on. With it a `show` or
-`hide` animation can move windows the right way and keep them on their monitor. picom
-itself knows nothing about workspaces: the plugin reads the window manager's EWMH
-properties and hands the scripts five numbers. What the scripts do with them is up to
-you; `styles/` has seven switch styles to start from.
+`hide` animation can move windows the right way and keep them on their monitor. It also
+tells them where a window's workspace is among the monitor's workspaces, for effects
+that draw the workspaces a switch passes. picom itself knows nothing about workspaces:
+the plugin reads the window manager's EWMH properties and hands the scripts ten numbers.
+What the scripts do with them is up to you; `styles/` has seven switch styles to start
+from.
 
 ![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
 horizontal on the portrait one](docs/slide.gif)
@@ -128,6 +130,13 @@ starts.
   not part of a workspace switch on the window's monitor (a new window, scratchpad,
   fullscreen, a window moved to another workspace).
 
+`plugin-ws-direction-distance`
+: How many workspaces of the monitor the switch moved: 1 to the next one, 2 when it
+  passes one, and so on; 0 when the direction is 0. Only workspaces that exist count, so
+  under i3 an empty workspace that isn't shown doesn't, and neither do the workspaces of
+  other monitors. A workspace that the window manager removes with the switch, like the
+  empty one i3 leaves, counts where it was.
+
 `plugin-ws-direction-monitor-x`, `plugin-ws-direction-monitor-y`,
 `plugin-ws-direction-monitor-width`, `plugin-ws-direction-monitor-height`
 : The monitor that shows the window's workspace. For a window that is not on one
@@ -135,8 +144,35 @@ starts.
   `window-monitor-*`). For a window that closes: always the whole screen, as the window
   is gone and can't be looked up; use `window-monitor-*` there.
 
-Workspaces sort in the order of `_NET_DESKTOP_NAMES`; under i3 that is the order of the
-workspace numbers, with unnumbered names after them.
+`plugin-ws-direction-faces`
+: How many workspaces that monitor has.
+
+`plugin-ws-direction-face`
+: How many of the monitor's workspaces the window's workspace is away from the
+  reference workspace, counted like `distance`: positive if it sorts after it, negative
+  if before. The reference workspace is the one the monitor showed before the switch, or
+  the one it shows now if the animation is not part of a switch. So in a switch the
+  windows that leave have 0, the windows that arrive have `direction * distance`, and a
+  window of a workspace the switch passes has a value in between. 0 for a window that is
+  not on one workspace.
+
+`plugin-ws-direction-selected`
+: 1 if that monitor shows the current workspace (`_NET_CURRENT_DESKTOP`, under i3 the
+  focused one), else 0.
+
+`plugin-ws-direction-placed`
+: 0 if the window is on one workspace but its centre is not on that workspace's
+  monitor, else 1. i3 doesn't place the windows of a hidden workspace, so a window keeps
+  its old place until its workspace is shown. A window moved to a hidden workspace of
+  another monitor is still on the first monitor then. A style that draws hidden
+  workspaces should not draw it: multiply its opacity by `placed`.
+
+The workspaces of a monitor are in the order of `_NET_DESKTOP_NAMES`. Under i3 that is
+their order on the output: by number, with unnumbered names after them. A window is on
+one workspace if the window
+manager lists it in `_NET_CLIENT_LIST`, it is on one desktop (`_NET_WM_DESKTOP`, so not
+sticky, and not in the scratchpad), and it isn't `_NET_WM_STATE_HIDDEN` (under i3: a tab
+that isn't the selected one, which isn't seen on its workspace).
 
 ### Environment
 
@@ -152,15 +188,19 @@ workspace numbers, with unnumbered names after them.
 ### i3
 
 Under i3, the current workspace (`_NET_CURRENT_DESKTOP`) is the focused one, and each
-monitor has workspaces of its own, which i3 tells through `_NET_DESKTOP_VIEWPORT`.
+monitor has workspaces of its own, which i3 tells through `_NET_DESKTOP_VIEWPORT`. i3
+removes an empty workspace once it is hidden, so it doesn't count in `distance`. When
+one i3 command switches workspaces on two monitors, `_NET_CURRENT_DESKTOP` ends on one
+of them; the plugin sees the switch of the other from the windows i3 maps there.
 
 ### Other EWMH window managers
 
 The plugin uses only what an EWMH window manager already does. It reads:
 
 - on the root window: `_NET_CURRENT_DESKTOP`, `_NET_DESKTOP_NAMES` (the workspaces and
-  their order) and `_NET_DESKTOP_VIEWPORT` (which monitor each workspace is on);
-- on client windows: `_NET_WM_DESKTOP`;
+  their order), `_NET_DESKTOP_VIEWPORT` (which monitor each workspace is on) and
+  `_NET_CLIENT_LIST` (the windows it manages);
+- on client windows: `_NET_WM_DESKTOP` and `_NET_WM_STATE` (`_NET_WM_STATE_HIDDEN`);
 - the monitors from RandR, and a window's place with `GetGeometry`.
 
 ## Troubleshooting

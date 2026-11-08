@@ -10,14 +10,16 @@ Upgrading from the unversioned plugin on `main`:
 
 - picom's `hook-v2` branch, with plugin API 0.2, loads it too, as does the picom fork.
 - The variables it had, `direction`, `monitor-x`, `monitor-y`, `monitor-width` and
-  `monitor-height`, keep their names and meaning.
+  `monitor-height`, keep their names and meaning. `distance`, `faces`, `face`,
+  `selected` and `placed` are new.
 - The `WS_DIRECTION_LOG` line for an animation says `direction = N` where it said
   `workspace-direction = N`; change what greps for it.
 
 Variables:
 
-- Five animation variables: `direction`, `monitor-x`, `monitor-y`, `monitor-width` and
-  `monitor-height`, all under `plugin-ws-direction-`.
+- Ten animation variables: `direction`, `distance`, `monitor-x`, `monitor-y`,
+  `monitor-width`, `monitor-height`, `faces`, `face`, `selected` and `placed`, all under
+  `plugin-ws-direction-`.
 - `WS_DIRECTION_LOG` logs every decision, in picom's log format. Its first line is the
   plugin's version.
 

@@ -2,6 +2,10 @@
 // Copyright (c) JornC
 
 /// Switches, and the variables.
+/// An animation is part of a recent switch on the window's monitor when it is a show or
+/// open of a window of the workspace switched to, a hide of a window of the workspace
+/// switched away from, or any trigger that picom does not fire for a change of the window
+/// itself, such as a custom trigger started with StartAnimations (see picom(1)).
 
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +50,22 @@ static int ws_order_compare(struct ws_order a, struct ws_order b) {
 	return 0;
 }
 
+/// Index of the monitor that fully contains a window, -1 for "all monitors".
+static int ws_rect_monitor(struct ws_rect r) {
+	for (int i = 0; i < wsd.n_monitors; i++) {
+		auto e = &wsd.monitors[i];
+		if (e->x1 <= r.x1 && r.x2 <= e->x2 && e->y1 <= r.y1 && r.y2 <= e->y2) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/// The rect of a monitor, the whole screen for -1.
+static struct ws_rect ws_monitor_rect(int index) {
+	return index >= 0 ? wsd.monitors[index] : wsd.screen;
+}
+
 /// Find what we know about the monitor of a desktop. Returns NULL if nothing.
 static struct ws_monitor *ws_find_monitor(unsigned desktop) {
 	auto index = ws_desktop_monitor(desktop);
@@ -62,9 +82,38 @@ static struct ws_visit *ws_shown(struct ws_monitor *m) {
 	return &m->visits[m->n_visits - 1];
 }
 
-/// Direction of the switch to `m->visits[k]`, `k` must be at least 1.
-static int ws_switch_direction(const struct ws_monitor *m, unsigned k) {
-	return ws_order_compare(m->visits[k].order, m->visits[k - 1].order);
+/// A workspace switch as a window sees it: which way it went, and how many workspaces of
+/// the monitor it moved. Both are 0 if the window's animation is not part of a switch.
+struct ws_move {
+	int direction;
+	unsigned distance;
+};
+
+/// The way from workspace `from` to workspace `to` on the monitor with index `index`. The
+/// distance counts the workspaces of the monitor that sort between the two, as they are
+/// now: with i3, an empty workspace that isn't shown doesn't exist, so it doesn't count.
+static struct ws_move ws_steps(struct ws_order from, struct ws_order to, int index) {
+	struct ws_move ret = {.direction = ws_order_compare(to, from)};
+	if (ret.direction == 0) {
+		return ret;
+	}
+	auto low = ret.direction > 0 ? from : to;
+	auto high = ret.direction > 0 ? to : from;
+	ret.distance = 1;
+	for (unsigned d = 0; d < wsd.n_names; d++) {
+		auto order = ws_order_of(wsd.names[d], d);
+		if (ws_desktop_monitor(d) == index && ws_order_compare(order, low) > 0 &&
+		    ws_order_compare(order, high) < 0) {
+			ret.distance++;
+		}
+	}
+	return ret;
+}
+
+/// The switch to `m->visits[k]`, `k` must be at least 1.
+static struct ws_move ws_switch_move(const struct ws_monitor *m, unsigned k) {
+	auto index = ws_monitor_index(m->has_viewport, m->viewport_x, m->viewport_y);
+	return ws_steps(m->visits[k - 1].order, m->visits[k].order, index);
 }
 
 static bool ws_switch_is_recent(const struct ws_visit *v) {
@@ -131,10 +180,11 @@ static void ws_add_switch(struct ws_monitor *m, unsigned k, unsigned desktop, xc
 
 	char source[32];
 	ws_source(source, w);
-	ws_log("Workspace switch on monitor at %d,%d: \"%s\" -> \"%s\", direction %d "
-	       "(from %s)",
+	auto move = ws_switch_move(m, k);
+	ws_log("Workspace switch on monitor at %d,%d: \"%s\" -> \"%s\", direction %d, "
+	       "distance %u (from %s)",
 	       m->viewport_x, m->viewport_y, m->visits[k - 1].name, m->visits[k].name,
-	       ws_switch_direction(m, k), source);
+	       move.direction, move.distance, source);
 }
 
 /// Get what we know about the monitor of `desktop`. If we know nothing yet, assume it
@@ -153,22 +203,31 @@ struct ws_monitor *ws_get_monitor(unsigned desktop, xcb_window_t w) {
 		ws_source(source, w);
 		ws_log("Workspace \"%s\" is shown (from %s)", wsd.names[desktop], source);
 	}
-	// Workspaces can move between monitors, and change their position in the list.
+	// Workspaces can move between monitors.
 	m->has_viewport = ws_desktop_viewport(desktop, &m->viewport_x, &m->viewport_y);
-	for (unsigned k = 0; k < m->n_visits; k++) {
-		auto position = ws_find_desktop(m->visits[k].name);
-		if (position >= 0) {
-			m->visits[k].order =
-			    ws_order_of(m->visits[k].name, (unsigned)position);
+	return m;
+}
+
+/// Workspaces can change their position in _NET_DESKTOP_NAMES. Sort the ones we remember
+/// by where they are now.
+static void ws_update_orders(void) {
+	for (unsigned i = 0; i < wsd.n_tracked; i++) {
+		auto m = &wsd.tracked[i];
+		for (unsigned k = 0; k < m->n_visits; k++) {
+			auto position = ws_find_desktop(m->visits[k].name);
+			if (position >= 0) {
+				m->visits[k].order =
+				    ws_order_of(m->visits[k].name, (unsigned)position);
+			}
 		}
 	}
-	return m;
 }
 
 /// Take the root window replies, and record a switch if the monitor of the current
 /// desktop now shows another workspace.
 void ws_refresh(struct ws_root_requests requests) {
 	bool root_changed = ws_read_root_reply(requests);
+	ws_update_orders();
 	if (wsd.current < 0 || wsd.current >= wsd.n_names) {
 		return;
 	}
@@ -186,10 +245,13 @@ void ws_refresh(struct ws_root_requests requests) {
 	}
 }
 
-/// Direction for a window of workspace `desktop` that shows.
-static int ws_direction_for_show(xcb_window_t w, unsigned desktop, const char **reason) {
+/// The switch that a window of workspace `desktop` that shows is part of. Sets `*mp` to
+/// what we know about the monitor of `desktop`, and returns `k` for the switch to
+/// `(*mp)->visits[k]`, or 0 if the window is not part of a switch.
+static unsigned ws_switch_for_show(xcb_window_t w, unsigned desktop,
+                                   struct ws_monitor **mp, const char **reason) {
 	auto name = wsd.names[desktop];
-	auto m = ws_get_monitor(desktop, w);
+	auto m = *mp = ws_get_monitor(desktop, w);
 	if (m == NULL) {
 		*reason = "too many monitors";
 		return 0;
@@ -198,7 +260,7 @@ static int ws_direction_for_show(xcb_window_t w, unsigned desktop, const char **
 	if (k >= 1 && ws_switch_is_recent(&m->visits[k])) {
 		*reason = "workspace was switched to";
 		ws_switch_touch(&m->visits[k]);
-		return ws_switch_direction(m, (unsigned)k);
+		return (unsigned)k;
 	}
 	if (k == (int)m->n_visits - 1) {
 		*reason = "no recent switch to its workspace";
@@ -216,14 +278,15 @@ static int ws_direction_for_show(xcb_window_t w, unsigned desktop, const char **
 		k = (int)m->n_visits - 1;
 	}
 	ws_add_switch(m, (unsigned)k, desktop, w);
-	k = ws_find_visit(m, name);
 	*reason = "workspace was switched to, the root window did not say so yet";
-	return ws_switch_direction(m, (unsigned)k);
+	return (unsigned)ws_find_visit(m, name);
 }
 
-/// Direction for a window of workspace `desktop` that hides.
-static int ws_direction_for_hide(unsigned desktop, const char **reason) {
-	auto m = ws_find_monitor(desktop);
+/// The switch that a window of workspace `desktop` that hides is part of. Like
+/// ws_switch_for_show.
+static unsigned
+ws_switch_for_hide(unsigned desktop, struct ws_monitor **mp, const char **reason) {
+	auto m = *mp = ws_find_monitor(desktop);
 	if (m == NULL) {
 		*reason = "nothing known about its monitor";
 		return 0;
@@ -238,33 +301,102 @@ static int ws_direction_for_hide(unsigned desktop, const char **reason) {
 		}
 		*reason = "workspace was switched away from";
 		ws_switch_touch(&m->visits[k]);
-		return ws_switch_direction(m, k);
+		return k;
 	}
 	*reason = "no recent switch away from its workspace";
 	return 0;
 }
 
-/// The monitor that fully contains the window whose geometry was asked for, or the
-/// whole screen.
-static struct ws_rect ws_window_monitor(xcb_get_geometry_cookie_t cookie) {
-	xcb_get_geometry_reply_t *g = ws_reply(cookie.sequence);
-	if (g == NULL) {
-		return wsd.screen;
+/// The switch that any other animation of a window of workspace `desktop` is part of: the
+/// latest switch on its monitor, if it is recent. Like ws_switch_for_show.
+static unsigned
+ws_switch_latest(unsigned desktop, struct ws_monitor **mp, const char **reason) {
+	auto m = *mp = ws_find_monitor(desktop);
+	if (m == NULL) {
+		*reason = "nothing known about its monitor";
+		return 0;
 	}
-	struct ws_rect r = {
+	auto k = m->n_visits - 1;
+	if (k == 0 || !ws_switch_is_recent(&m->visits[k])) {
+		*reason = "no recent switch on its monitor";
+		return 0;
+	}
+	*reason = "started during a switch on its monitor";
+	ws_switch_touch(&m->visits[k]);
+	return k;
+}
+
+/// Whether picom fires `trigger` for a change of the window itself. Such an animation is
+/// never part of a switch.
+static bool ws_is_own_change(const char *trigger) {
+	static const char *const names[] = {
+	    "size", "position", "increase-opacity", "decrease-opacity", "color",
+	};
+	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		if (strcmp(trigger, names[i]) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/// Read where a window is, with its border, in a round trip of its own. Returns false if
+/// the window is gone.
+static bool ws_window_rect(xcb_window_t w, struct ws_rect *r) {
+	xcb_get_geometry_reply_t *g = ws_reply(xcb_get_geometry(wsd.c, w).sequence);
+	if (g == NULL) {
+		return false;
+	}
+	*r = (struct ws_rect){
 	    .x1 = g->x,
 	    .y1 = g->y,
 	    .x2 = g->x + g->width + g->border_width * 2,
 	    .y2 = g->y + g->height + g->border_width * 2,
 	};
 	free(g);
-	for (int i = 0; i < wsd.n_monitors; i++) {
-		auto e = &wsd.monitors[i];
-		if (e->x1 <= r.x1 && r.x2 <= e->x2 && e->y1 <= r.y1 && r.y2 <= e->y2) {
-			return *e;
-		}
+	return true;
+}
+
+/// Where a window is, for a window that starts an animation: on which desktop (-1 if it
+/// is not on one workspace), its place, and the index of its monitor (-1 for the whole
+/// screen). Nothing is known about a window that closes.
+struct ws_place {
+	int64_t desktop;
+	struct ws_rect rect;
+	int monitor;
+};
+
+static struct ws_place
+ws_place_of(const struct picom_animation_start *start, xcb_window_t client, bool gone) {
+	struct ws_place ret = {.desktop = -1, .rect = wsd.screen, .monitor = -1};
+	if (gone) {
+		return ret;
 	}
-	return wsd.screen;
+	auto c = ws_find_client(client);
+	if (c != NULL) {
+		ret.desktop = c->desktop;
+		ret.rect = c->rect;
+	} else if (!ws_window_rect(start->window, &ret.rect)) {
+		return ret;
+	}
+	ret.monitor = ret.desktop >= 0 ? ws_desktop_monitor((unsigned)ret.desktop)
+	                               : ws_rect_monitor(ret.rect);
+	return ret;
+}
+
+/// The face of a window of workspace `desktop` on the monitor with index `index`. The
+/// reference workspace is the one `m` showed before the switch to `m->visits[k]`, or the
+/// one it shows now if `k` is 0.
+static int ws_face(unsigned desktop, int index, struct ws_monitor *m, unsigned k) {
+	auto order = ws_order_of(wsd.names[desktop], desktop);
+	auto reference = order;
+	if (k > 0) {
+		reference = m->visits[k - 1].order;
+	} else if (m != NULL) {
+		reference = ws_shown(m)->order;
+	}
+	auto steps = ws_steps(reference, order, index);
+	return steps.direction * (int)steps.distance;
 }
 
 /// The name of a window, for the log.
@@ -282,8 +414,7 @@ static char *ws_window_name(xcb_window_t w) {
 	return ret;
 }
 
-/// Work out all our variables for a window that starts an animation. Every request goes
-/// out before we wait for any reply, so a start costs one round trip to the X server.
+/// Work out all our variables for a window that starts an animation.
 void ws_compute(const struct picom_animation_start *start,
                 double values[static WS_N_VARIABLES]) {
 	auto now = ws_now_us();
@@ -296,55 +427,63 @@ void ws_compute(const struct picom_animation_start *start,
 	bool gone = strcmp(start->trigger, "close") == 0;
 	xcb_window_t client = start->client != XCB_NONE ? start->client : start->window;
 
-	// The root window is read again on the first call in each frame, and the windows
-	// that start in the same frame share that. Only shows and hides can be part of a
-	// workspace switch. The window's own geometry is asked for at the same time, so
-	// that a window without a single workspace costs no second round trip.
-	bool new_frame = start->frame != wsd.frame;
-	struct ws_root_requests root = {0};
-	xcb_get_property_cookie_t desktop_request = {0};
-	xcb_get_geometry_cookie_t geometry_request = {0};
-	if (new_frame) {
-		root = ws_read_root_request();
-	}
-	if (show || hide) {
-		desktop_request = ws_window_desktop_request(client);
-	}
-	if (!gone) {
-		geometry_request = xcb_get_geometry(wsd.c, start->window);
-	}
-
-	if (new_frame) {
+	// The root window and the managed windows are read again on the first call in
+	// each frame, and the windows that start in the same frame share that.
+	if (start->frame != wsd.frame) {
+		auto root = ws_read_root_request();
+		auto clients = ws_client_list_request();
 		wsd.frame = start->frame;
 		wsd.frame_time_us = now;
 		ws_refresh(root);
+		ws_read_clients(clients);
 	}
-	const char *reason = "window is not on one workspace";
-	int direction = 0;
-	int monitor = -1;
-	if (show || hide) {
-		auto desktop = ws_window_desktop_reply(desktop_request);
-		if (desktop >= 0) {
-			monitor = ws_desktop_monitor((unsigned)desktop);
-			direction =
-			    show ? ws_direction_for_show(client, (unsigned)desktop, &reason)
-			         : ws_direction_for_hide((unsigned)desktop, &reason);
-		}
+
+	auto place = ws_place_of(start, client, gone);
+	auto desktop = place.desktop;
+	auto monitor_rect = ws_monitor_rect(place.monitor);
+
+	struct ws_monitor *m = NULL;
+	unsigned k = 0;
+	const char *reason;
+	if (desktop < 0) {
+		reason = gone ? "window is gone" : "window is not on one workspace";
+	} else if (show) {
+		k = ws_switch_for_show(client, (unsigned)desktop, &m, &reason);
+	} else if (hide) {
+		k = ws_switch_for_hide((unsigned)desktop, &m, &reason);
+	} else if (ws_is_own_change(start->trigger)) {
+		m = ws_find_monitor((unsigned)desktop);
+		reason = "a change of the window itself";
 	} else {
-		reason = "not a show or hide";
+		k = ws_switch_latest((unsigned)desktop, &m, &reason);
 	}
-	auto rect = wsd.screen;
-	if (monitor >= 0) {
-		rect = wsd.monitors[monitor];
-		xcb_discard_reply(wsd.c, geometry_request.sequence);
-	} else if (!gone) {
-		rect = ws_window_monitor(geometry_request);
+	auto move = k > 0 ? ws_switch_move(m, k) : (struct ws_move){0};
+
+	int face = 0;
+	bool placed = true;
+	if (desktop >= 0) {
+		face = ws_face((unsigned)desktop, place.monitor, m, k);
+		auto r = place.rect;
+		placed = ws_rect_has_point(monitor_rect, r.x1 + (r.x2 - r.x1) / 2,
+		                           r.y1 + (r.y2 - r.y1) / 2);
 	}
-	values[WS_VAR_DIRECTION] = direction;
-	values[WS_VAR_MONITOR_X] = rect.x1;
-	values[WS_VAR_MONITOR_Y] = rect.y1;
-	values[WS_VAR_MONITOR_WIDTH] = rect.x2 - rect.x1;
-	values[WS_VAR_MONITOR_HEIGHT] = rect.y2 - rect.y1;
+	unsigned faces = 0;
+	for (unsigned d = 0; d < wsd.n_names; d++) {
+		faces += ws_desktop_monitor(d) == place.monitor;
+	}
+	bool selected = wsd.current >= 0 && wsd.current < wsd.n_names &&
+	                ws_desktop_monitor((unsigned)wsd.current) == place.monitor;
+
+	values[WS_VAR_DIRECTION] = move.direction;
+	values[WS_VAR_DISTANCE] = move.distance;
+	values[WS_VAR_MONITOR_X] = monitor_rect.x1;
+	values[WS_VAR_MONITOR_Y] = monitor_rect.y1;
+	values[WS_VAR_MONITOR_WIDTH] = monitor_rect.x2 - monitor_rect.x1;
+	values[WS_VAR_MONITOR_HEIGHT] = monitor_rect.y2 - monitor_rect.y1;
+	values[WS_VAR_FACES] = faces;
+	values[WS_VAR_FACE] = face;
+	values[WS_VAR_SELECTED] = selected;
+	values[WS_VAR_PLACED] = placed;
 
 	if (wsd.log != NULL) {
 		// Measured before the name lookup, which only the log needs.
@@ -352,9 +491,12 @@ void ws_compute(const struct picom_animation_start *start,
 		auto waits = wsd.n_waits;
 		char *name = ws_window_name(client);
 		ws_log("%s of window %#010x (%s): direction = %d (%s), "
-		       "workspace monitor %d, %llu us, %u waits for X",
-		       start->trigger, start->window, name, direction, reason, monitor,
-		       (unsigned long long)took, waits);
+		       "distance %u, face %d of %u, selected %d, placed %d, "
+		       "monitor %d,%d %dx%d, %llu us, %u waits for X",
+		       start->trigger, start->window, name, move.direction, reason,
+		       move.distance, face, faces, selected, placed, monitor_rect.x1,
+		       monitor_rect.y1, monitor_rect.x2 - monitor_rect.x1,
+		       monitor_rect.y2 - monitor_rect.y1, (unsigned long long)took, waits);
 		free(name);
 	}
 

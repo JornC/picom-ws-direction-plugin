@@ -34,10 +34,15 @@ static_assert(false, "picom/api.h is not compatible: ws-direction needs plugin "
 /// The animation variables, plugin-ws-direction-<name>, with names in ws_variable_names.
 enum ws_variable {
 	WS_VAR_DIRECTION,
+	WS_VAR_DISTANCE,
 	WS_VAR_MONITOR_X,
 	WS_VAR_MONITOR_Y,
 	WS_VAR_MONITOR_WIDTH,
 	WS_VAR_MONITOR_HEIGHT,
+	WS_VAR_FACES,
+	WS_VAR_FACE,
+	WS_VAR_SELECTED,
+	WS_VAR_PLACED,
 	WS_N_VARIABLES,
 };
 
@@ -86,6 +91,15 @@ struct ws_rect {
 	int32_t x1, y1, x2, y2;
 };
 
+/// A window the window manager manages.
+struct ws_client {
+	xcb_window_t id;
+	/// Its desktop, -1 if it is not on one workspace.
+	int64_t desktop;
+	/// Where it is, in root coordinates.
+	struct ws_rect rect;
+};
+
 /// The requests for the root window properties, the screen size and the monitors, sent
 /// together so they take one round trip. Pair ws_read_root_request with
 /// ws_read_root_reply.
@@ -100,7 +114,7 @@ struct ws_state {
 	xcb_connection_t *c;
 	xcb_window_t root;
 	xcb_atom_t a_current_desktop, a_desktop_names, a_desktop_viewport, a_wm_desktop,
-	    a_utf8_string, a_net_wm_name;
+	    a_utf8_string, a_net_wm_name, a_client_list, a_wm_state, a_wm_state_hidden;
 	struct ws_rect screen;
 	FILE *log;
 
@@ -124,6 +138,11 @@ struct ws_state {
 
 	struct ws_rect monitors[WS_MAX_MONITORS];
 	int n_monitors;
+
+	/// The windows in _NET_CLIENT_LIST, read again on the first call in each frame.
+	/// Windows whose place could not be read are left out.
+	struct ws_client *clients;
+	unsigned n_clients;
 
 	struct ws_monitor tracked[WS_MAX_MONITORS];
 	unsigned n_tracked;
@@ -153,8 +172,10 @@ int64_t ws_find_desktop(const char *name);
 bool ws_desktop_viewport(unsigned desktop, int32_t *x, int32_t *y);
 int ws_monitor_index(bool has_viewport, int32_t x, int32_t y);
 int ws_desktop_monitor(unsigned desktop);
-xcb_get_property_cookie_t ws_window_desktop_request(xcb_window_t w);
-int64_t ws_window_desktop_reply(xcb_get_property_cookie_t cookie);
+bool ws_rect_has_point(struct ws_rect r, int32_t x, int32_t y);
+xcb_get_property_cookie_t ws_client_list_request(void);
+void ws_read_clients(xcb_get_property_cookie_t list_request);
+const struct ws_client *ws_find_client(xcb_window_t id);
 struct ws_root_requests ws_read_root_request(void);
 bool ws_read_root_reply(struct ws_root_requests requests);
 bool ws_read_root(void);
