@@ -658,7 +658,7 @@ void ws_compute(const struct picom_animation_start *start,
 	    strcmp(start->trigger, "open") == 0 || strcmp(start->trigger, "show") == 0;
 	bool hide = strcmp(start->trigger, "hide") == 0;
 	// A window that closes is gone (destroyed, or reparented away). There is nothing
-	// to ask about it.
+	// to ask about it: we take what the last read that had it knew.
 	bool gone = strcmp(start->trigger, "close") == 0;
 	// picom may not know the client window of a frame yet.
 	xcb_window_t client = start->client != XCB_NONE ? start->client : start->window;
@@ -668,14 +668,22 @@ void ws_compute(const struct picom_animation_start *start,
 		ws_read();
 	}
 
-	auto c = gone ? NULL : ws_find_client(client);
-	if (c == NULL && !gone) {
+	auto c = ws_find_client(client);
+	if (c == NULL) {
 		c = ws_find_client_by_frame(start->window);
+	}
+	// A window the last read no longer found, like one that hides because it closes:
+	// what the read before knew of it.
+	bool lost = false;
+	if (c == NULL) {
+		c = ws_find_gone(start->window);
+		lost = c != NULL;
 	}
 	// A backdrop has the variables of a window of its workspace.
 	auto backdrop = c == NULL ? ws_backdrop_workspace(start->window) : NULL;
 	int64_t desktop = backdrop != NULL ? ws_find_desktop(backdrop)
 	                  : c == NULL      ? -1
+	                  : lost           ? ws_find_desktop(c->workspace)
 	                                   : c->desktop;
 	struct ws_rect rect = wsd.screen;
 	bool known = c != NULL || backdrop != NULL ||
@@ -709,7 +717,8 @@ void ws_compute(const struct picom_animation_start *start,
 	const struct ws_switch *first = NULL, *last = NULL;
 	const char *reason;
 	if (gone) {
-		reason = "window is gone";
+		reason = c != NULL ? "window is gone, as the last read saw it"
+		                   : "window is gone";
 	} else if (desktop < 0) {
 		reason = "window is not on one workspace";
 	} else if ((show || hide) && c == NULL) {

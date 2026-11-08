@@ -88,6 +88,7 @@ void fx_reset(void) {
 	}
 	free_clients(wsd.clients, wsd.n_clients);
 	free_clients(read_clients, n_read_clients);
+	free_clients(wsd.gone, wsd.n_gone);
 	free(wsd.starts);
 	read_clients = NULL;
 	n_read_clients = 0;
@@ -191,7 +192,7 @@ void fx_read(void) {
 	ws_reconcile(prev, n_prev, events, n_events, read_current);
 	n_events = 0;
 	read_current = wsd.current;
-	free_clients(prev, n_prev);
+	ws_keep_gone(prev, n_prev);
 	read_clients = copy_clients(wsd.clients, wsd.n_clients);
 	n_read_clients = wsd.n_clients;
 	wsd.read_frame = wsd.frame;
@@ -272,4 +273,9 @@ static struct fx_values compute(struct picom_animation_start start) {
 struct fx_values fx_compute(xcb_window_t id, const char *trigger) {
 	return compute((struct picom_animation_start){
 	    .trigger = trigger, .window = id, .client = id, .frame = wsd.frame});
+}
+
+struct fx_values fx_compute_frame(xcb_window_t frame, const char *trigger) {
+	return compute((struct picom_animation_start){
+	    .trigger = trigger, .window = frame, .frame = wsd.frame});
 }

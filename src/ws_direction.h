@@ -291,6 +291,10 @@ struct ws_state {
 	/// The top-level windows, bottom to top, as the last read saw them.
 	xcb_window_t *stack;
 	unsigned n_stack;
+	/// Those that the read before had and the last read didn't: they closed, or the
+	/// window manager let go of them.
+	struct ws_client *gone;
+	unsigned n_gone;
 
 	struct ws_monitor tracked[WS_MAX_MONITORS];
 	unsigned n_tracked;
@@ -396,6 +400,8 @@ int ws_monitor_of_name(xcb_atom_t name);
 struct ws_rect ws_monitor_rect(int index);
 const struct ws_client *ws_find_client(xcb_window_t id);
 const struct ws_client *ws_find_client_by_frame(xcb_window_t frame);
+void ws_keep_gone(struct ws_client *prev, unsigned n_prev);
+const struct ws_client *ws_find_gone(xcb_window_t w);
 void ws_read_start(void);
 bool ws_read_advance(uint64_t wait_us);
 void ws_read(void);

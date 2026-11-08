@@ -66,7 +66,7 @@ Variables:
 
 ### Unit tests
 
-`tests/unit` has 79 tests of the logic that works on the plugin's state: which monitor a
+`tests/unit` has 84 tests of the logic that works on the plugin's state: which monitor a
 workspace is on, the order of a monitor's workspaces, the steps of a switch, which
 workspace each monitor shows, which switch each show and hide is part of, and the
 variables, through `ws_compute`. They run in about 10 ms, without an X server. They link

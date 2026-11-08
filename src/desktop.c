@@ -208,6 +208,31 @@ const struct ws_client *ws_find_client_by_frame(xcb_window_t frame) {
 	return NULL;
 }
 
+/// Keep the windows of `prev`, the read before, that the last read no longer found:
+/// picom may start their close in this pass. Takes `prev`.
+void ws_keep_gone(struct ws_client *prev, unsigned n_prev) {
+	ws_free_clients(wsd.gone, wsd.n_gone);
+	wsd.n_gone = 0;
+	for (unsigned i = 0; i < n_prev; i++) {
+		if (ws_find_client(prev[i].id) == NULL) {
+			prev[wsd.n_gone++] = prev[i];
+		} else {
+			free(prev[i].workspace);
+		}
+	}
+	wsd.gone = prev;
+}
+
+/// A window that the last read no longer found, by its frame or its own id, or NULL.
+const struct ws_client *ws_find_gone(xcb_window_t w) {
+	for (unsigned i = 0; i < wsd.n_gone; i++) {
+		if (wsd.gone[i].frame == w || wsd.gone[i].id == w) {
+			return &wsd.gone[i];
+		}
+	}
+	return NULL;
+}
+
 /// Start reading the root window and the managed windows again: send the first round
 /// trip. ws_read_advance takes the replies.
 void ws_read_start(void) {
@@ -575,7 +600,7 @@ bool ws_read_advance(uint64_t wait_us) {
 
 	ws_reconcile(prev, n_prev, seen, n_seen, prev_current);
 	free(seen);
-	ws_free_clients(prev, n_prev);
+	ws_keep_gone(prev, n_prev);
 	wsd.read.step = WS_READ_IDLE;
 	wsd.read_frame = wsd.frame;
 	ws_log("Read the root window and %u windows in %" PRIu64 " us%s", wsd.n_clients,

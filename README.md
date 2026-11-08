@@ -300,10 +300,11 @@ over them.
 
 `plugin-ws-direction-monitor-x`, `plugin-ws-direction-monitor-y`,
 `plugin-ws-direction-monitor-width`, `plugin-ws-direction-monitor-height`
-: The monitor that shows the window's workspace. For a window that is not on one
-  workspace: the monitor that fully contains the window, else the whole screen (like
-  `window-monitor-*`). For a window that closes: always the whole screen, as the window
-  is gone and can't be looked up; use `window-monitor-*` there.
+: The monitor that shows the window's workspace, also while that workspace is hidden.
+  For a window that is not on one workspace (see below): the monitor that fully contains
+  the window, else the whole screen (like `window-monitor-*`). For a window that closes:
+  the monitor it was on, as the last read before it closed saw it; the whole screen only
+  for a window no read saw.
 
 `plugin-ws-direction-faces`
 : How many workspaces that monitor has.

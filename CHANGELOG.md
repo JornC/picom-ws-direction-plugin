@@ -27,6 +27,7 @@ Variables:
   manager showed or hid the window to make it.
 - The root window and the managed windows are read at most once per pass. When the X
   server is slow to answer, the plugin pauses the screen instead of holding picom up.
+- A window that closes, or hides as it closes, gets the monitor, faces and index it had.
 - `WS_DIRECTION_LOG` logs every decision, in picom's log format. Its first line is the
   plugin's version.
 

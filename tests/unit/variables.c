@@ -177,6 +177,78 @@ TEST(variables_own_change_is_never_a_switch) {
 	CHECK_INT(fx_compute(0x101, "size").face, -2);
 }
 
+TEST(variables_close_gets_the_monitor_it_was_on) {
+	// The read in the pass picom starts the close no longer finds the window; the
+	// read before had it on 3.
+	switch_1_to_3();
+	fx_pass();
+	fx_unmap(0x103);
+	fx_close(0x103);
+	fx_read();
+	auto v = fx_compute(0x103, "close");
+	CHECK_INT(v.direction, 0);
+	CHECK_INT(v.x, 0);
+	CHECK_INT(v.y, 480);
+	CHECK_INT(v.width, 3440);
+	CHECK_INT(v.height, 1440);
+	CHECK_INT(v.faces, 4);
+	CHECK_INT(v.face, 0);
+	CHECK_INT(v.placed, 1);
+	CHECK_INT(v.index, 2);
+	CHECK_INT(v.shown, 2);
+}
+
+TEST(variables_hide_of_a_window_that_closes) {
+	// i3 unmaps the frame of a window that closes before it destroys it: picom fires
+	// hide, after a read that no longer finds the window.
+	switch_1_to_3();
+	fx_pass();
+	fx_unmap(0x103);
+	fx_close(0x103);
+	fx_read();
+	auto v = fx_compute(0x103, "hide");
+	CHECK_INT(v.direction, 0);
+	CHECK_INT(v.y, 480);
+	CHECK_INT(v.width, 3440);
+	CHECK_INT(v.index, 2);
+}
+
+TEST(variables_close_before_a_read_saw_it_go) {
+	switch_1_to_3();
+	auto v = fx_compute(0x103, "close");
+	CHECK_INT(v.direction, 0);
+	CHECK_INT(v.y, 480);
+	CHECK_INT(v.width, 3440);
+	CHECK_INT(v.index, 2);
+}
+
+TEST(variables_close_of_a_window_no_read_had) {
+	switch_1_to_3();
+	auto v = fx_compute(0x999, "close");
+	CHECK_INT(v.direction, 0);
+	CHECK_INT(v.x, 0);
+	CHECK_INT(v.y, 0);
+	CHECK_INT(v.width, 4520);
+	CHECK_INT(v.height, 1920);
+	CHECK_INT(v.faces, 0);
+	CHECK_INT(v.index, 0);
+}
+
+TEST(variables_frame_whose_client_picom_does_not_know) {
+	// picom gives the frame and no client window: the plugin finds the client by its
+	// frame.
+	two_monitors();
+	fx_client(0x102)->frame = 0x902;
+	fx_read();
+	fx_pass();
+	fx_switch(1);
+	auto v = fx_compute_frame(0x902, "show");
+	CHECK_INT(v.direction, 1);
+	CHECK_INT(v.face, 1);
+	CHECK_INT(v.index, 1);
+	CHECK_INT(v.y, 480);
+}
+
 TEST(variables_window_on_all_desktops) {
 	switch_1_to_3();
 	fx_window(0x200, -1, (struct ws_rect){.x1 = 3500, .y1 = 100, .x2 = 3600, .y2 = 200});

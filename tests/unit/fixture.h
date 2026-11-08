@@ -76,3 +76,5 @@ struct ws_monitor *fx_tracked(unsigned desktop);
 uint64_t fx_last_switch(unsigned desktop);
 /// Work out the variables of window `id` for an animation of `trigger`, in this pass.
 struct fx_values fx_compute(xcb_window_t id, const char *trigger);
+/// The same for top-level window `frame`, whose client window picom doesn't know.
+struct fx_values fx_compute_frame(xcb_window_t frame, const char *trigger);

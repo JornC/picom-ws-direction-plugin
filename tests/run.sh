@@ -920,6 +920,39 @@ i3cmd 'workspace 1:IDE'
 sleep "$SETTLE"
 stop_picom
 
+# A window that closes gets the monitor it was on, as the plugin's last read saw it. i3
+# may unmap its frame before it destroys it: then picom fires hide.
+{
+	sed '/^rules = ({/,$d' "$OUT/wave.conf"
+	cat <<'EOF'
+rules = ({
+  match = "!override_redirect && window_type = 'normal'";
+  animations = ({
+    triggers = ["close", "hide"];
+    opacity = { duration = 0.3; start = 1; end = 0; };
+    crop-x = "plugin-ws-direction-monitor-x";
+    crop-y = "plugin-ws-direction-monitor-y";
+    crop-width = "plugin-ws-direction-monitor-width";
+    crop-height = "plugin-ws-direction-monitor-height";
+  });
+});
+EOF
+} >"$OUT/close.conf"
+start_picom "$OUT/close.conf" picom-close
+start_xterm newwin close-a
+sleep "$SETTLE"
+mark=$(log_mark)
+stop "$LAST_PID"
+sleep "$SETTLE"
+closed=$(tail -n +"$((mark + 1))" "$LOG" | grep -E 'close of window 0x[0-9a-f]+ \(\): direction = 0 ' |
+	sed -nE 's/.*face (-?[0-9]+ of [0-9]+).*(monitor [0-9]+,[0-9]+ [0-9]+x[0-9]+), index ([0-9]+).*/\1 \2 index \3/p')
+if [[ $closed == "0 of 6 $DPT_RECT index 0" ]]; then
+	pass "a window that closes on DPT's 1:IDE gets DPT ($closed)"
+else
+	fail "a window that closes on DPT's 1:IDE gets DPT" "got: ${closed:-no close line}; see $LOG"
+fi
+stop_picom
+
 # The plugin starts the custom trigger ws-pass from its frame callback, on all xterms of
 # the switch's monitor, without StartAnimations. Every workspace with an xterm is shown
 # once under this picom, so the xterms have images to keep, and all of them get ws-pass.
