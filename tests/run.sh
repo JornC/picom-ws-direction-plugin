@@ -631,6 +631,7 @@ workspace "1:IDE" output DPT
 workspace "2:Web" output DPT
 workspace "4:Misc" output DPT
 workspace "7:Extra" output DPT
+workspace "9:Float" output DPT
 workspace "3:Term" output HDT
 workspace "5:Music" output HDT
 assign [instance="^ws1\$"] workspace "1:IDE"
@@ -644,6 +645,8 @@ assign [instance="^hang\$"] workspace "3:Term"
 for_window [instance="^hang\$"] floating enable, resize set 888 px 400 px, move position 3677 px 100 px
 assign [instance="^notes\$"] workspace "Notes"
 assign [instance="^alpha\$"] workspace "Alpha"
+assign [instance="^float\$"] workspace "9:Float"
+for_window [instance="^float\$"] floating enable, resize set 300 px 200 px
 for_window [instance="^scratch\$"] move scratchpad
 EOF
 # i3 keeps its error log, and its layout across a restart, in $XDG_RUNTIME_DIR/i3. Keep
@@ -1682,6 +1685,51 @@ else
 fi
 unfold close
 sleep 1
+stop_picom
+
+# Backdrops: with a rule for them (wall's, with their opacity as a number), the overview
+# draws each workspace's backdrop behind its windows, and a click on an empty part of a
+# tile picks its workspace. 9:Float has only a small floating xterm, which never showed
+# under this picom, so its tile is its backdrop alone.
+{
+	sed '/^rules = ({/,$d' "$OUT/wall.conf"
+	echo 'rules = ({'
+	echo "  match = \"!override_redirect && window_type = 'normal'\";"
+	cat "$PASS_STYLE"
+	echo '}, {'
+	echo "  match = \"!override_redirect && window_type = 'normal'\";"
+	cat "$ROOT/styles/wall.conf"
+	echo '}, {'
+	echo "  match = \"class_g = 'ws-direction-backdrop'\";"
+	cat "$ROOT/styles/wall.conf"
+	echo '});'
+} >"$OUT/wall-backdrop.conf"
+WS_DIRECTION_BACKDROP=wallpaper start_picom "$OUT/wall-backdrop.conf" picom-backdrop
+start_xterm float float-a -bg "#ff00ff"
+FLOAT_PID=$LAST_PID
+sleep "$SETTLE"
+mark=$(log_mark)
+"$ROOT/build/ws-direction" overview open --wait &
+waiter=$!
+sleep 1
+tile=$(tail -n +"$((mark + 1))" "$LOG" |
+	sed -nE 's/.*\] ws-unfold of window 0x[0-9a-f]+ \(ws-direction backdrop 9:Float\): .*face -?[0-9]+ of ([0-9]+),.* index ([0-9]+), .*/\1 \2/p' |
+	head -n 1)
+read -r faces index <<<"${tile:-1 0}"
+xdotool mousemove 1600 "$(tile_y "$faces" "$index")" click 1
+wait_for_exit "$waiter" 3
+status=$?
+sleep 1
+picked=$(tail -n +"$((mark + 1))" "$LOG" | grep -c 'picks workspace "9:Float" by its backdrop')
+if [[ -n $tile ]] && ((status == 0 && picked == 1)) && [[ $(focused_ws) == 9:Float ]]; then
+	pass "backdrops: a click on 9:Float's empty tile picks it (its backdrop is tile $index of $faces)"
+else
+	fail "backdrops: a click on 9:Float's empty tile picks it" \
+		"backdrop's ws-unfold: ${tile:-none}, open --wait returned $status, $picked picks, focus on $(focused_ws); see $LOG"
+fi
+i3cmd 'workspace 1:IDE'
+stop "$FLOAT_PID"
+sleep "$(pass_time 1 1.1)"
 stop_picom
 
 # styles/cube.conf and styles/flip.conf put the workspaces on the sides of a box, or of a

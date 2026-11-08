@@ -439,11 +439,11 @@ rule for their class with the same style:
       @include "ws-direction/cube.conf"
     });
 
-In a style, don't take a backdrop's opacity from `window-mapped-opacity` alone, which is
-about 0 for it: draw it at `max(window-mapped-opacity, plugin-ws-direction-backdrop)`.
-Their name is `ws-direction backdrop <workspace>`. As they are at the bottom of the
-stack, a desktop window that the window manager also puts at the bottom may be drawn
-over them.
+The shipped styles draw a backdrop at full opacity, through
+`plugin-ws-direction-backdrop`; in a style of your own, don't take a backdrop's opacity
+from `window-mapped-opacity` alone, which is about 0 for it. Their name is
+`ws-direction backdrop <workspace>`. As they are at the bottom of the stack, a desktop
+window that the window manager also puts at the bottom may be drawn over them.
 
 ### Checking a style
 
