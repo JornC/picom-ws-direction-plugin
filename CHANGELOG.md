@@ -38,6 +38,16 @@ Switch passes:
 - A window that moves to the new workspace with the switch gets no `ws-pass`.
 - The plugin declares `ws-pass`, so a config doesn't list it in `animation-triggers`.
 
+Getting images back:
+
+- When picom loses the images of hidden windows, after a config change or a window
+  manager restart, the plugin gets them back: it freezes the screen, the keyboard and
+  the pointer, has the window manager show each such workspace once, follows what the
+  windows draw, and goes back.
+- It leaves a monitor alone while that shows a workspace without windows.
+- `ws-direction warm` gets them back when asked, and `ws-direction warm --auto off` stops
+  the plugin from doing it by itself.
+
 Overview:
 
 - `ws-direction overview open` unfolds the monitor with the focus into an overview of its

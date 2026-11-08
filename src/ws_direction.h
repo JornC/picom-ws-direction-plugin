@@ -4,9 +4,10 @@
 /// The plugin's internal header: the types, the state and the functions that more than
 /// one of its modules uses, or the unit tests in tests/unit. desktop.c reads the
 /// monitors, the workspaces and the managed windows from the X server. passes.c finds
-/// switches, starts ws-pass and works out the variables. overview.c unfolds and folds the
-/// overview, and does the commands. backdrop.c keeps a backdrop window per workspace.
-/// plugin.c hooks them up to picom and calls them in every pass.
+/// switches, starts ws-pass and works out the variables. warm.c gets the images of hidden
+/// workspaces back. overview.c unfolds and folds the overview, and does the commands.
+/// backdrop.c keeps a backdrop window per workspace. plugin.c hooks them up to picom and
+/// calls them in every pass.
 
 #pragma once
 
@@ -186,10 +187,28 @@ struct ws_event {
 	uint32_t sequence;
 };
 
+/// A monitor whose workspaces we show, to get images back.
+struct ws_warm_monitor {
+	/// The workspace it showed, and those we show on it, one per round.
+	char *shown;
+	char **show;
+	unsigned n_show;
+};
+
+enum ws_warm_step {
+	WS_WARM_IDLE,
+	/// The screen is frozen; we wait for the window manager to settle.
+	WS_WARM_SETTLE,
+	/// We show one workspace per monitor, and wait for its windows to draw.
+	WS_WARM_SHOW,
+	/// We show the workspaces that were shown before, and wait for their windows.
+	WS_WARM_RESTORE,
+};
+
 /// The requests of the first round trip of a read: the root window properties, the
 /// screen size, the monitors, the top-level windows and the window list.
 struct ws_root_requests {
-	xcb_get_property_cookie_t viewports, names, list;
+	xcb_get_property_cookie_t viewports, names, list, warm;
 	xcb_get_geometry_cookie_t screen;
 	xcb_randr_get_monitors_cookie_t monitors;
 	xcb_query_tree_cookie_t tree;
@@ -200,8 +219,9 @@ struct ws_root_requests {
 /// the list, and for the desktop names and the current desktop again.
 enum ws_read_step { WS_READ_IDLE, WS_READ_ROOT, WS_READ_WINDOWS };
 
-// Defined in desktop.c and backdrop.c, the only modules that look inside them.
+// Defined in desktop.c and warm.c, the only modules that look inside them.
 struct ws_window_requests;
+struct ws_watch;
 struct ws_backdrop;
 
 /// Everything the plugin knows, defined in plugin.c.
@@ -211,7 +231,7 @@ struct ws_state {
 	xcb_window_t root;
 	xcb_atom_t a_current_desktop, a_desktop_names, a_desktop_viewport, a_wm_desktop,
 	    a_utf8_string, a_net_wm_name, a_client_list, a_wm_state, a_wm_state_hidden,
-	    a_command, a_answer, a_active_window;
+	    a_command, a_answer, a_active_window, a_warm;
 	struct ws_rect screen;
 	FILE *log;
 
@@ -294,6 +314,18 @@ struct ws_state {
 	unsigned n_starts;
 	uint64_t starts_frame;
 
+	/// When we last saw the root window's workspace properties or window list change.
+	uint64_t root_change_us;
+	/// The windows we saw picom keep an image of while they were hidden. When one of
+	/// them loses it, we get it back.
+	xcb_window_t *keepers;
+	unsigned n_keepers;
+	/// Whether the pointer or keyboard grab failed the last time we tried, for the
+	/// log.
+	bool grab_failed;
+	/// Whether the root window property WS_WARM_PROPERTY says "off": we get images
+	/// back only when the command asks.
+	bool warm_off;
 	/// The window that owns our selection, which the command sends its commands to.
 	xcb_window_t owner;
 	/// The commands that came and that we didn't do yet, and the commands that wait
@@ -312,6 +344,27 @@ struct ws_state {
 	} click;
 	/// An event that ws_pending took from xcb's queue, not handled yet.
 	xcb_generic_event_t *queued;
+
+	/// Getting images back.
+	struct {
+		enum ws_warm_step step;
+		/// When we started, and when the current step started.
+		uint64_t start_us, step_us;
+		struct ws_warm_monitor monitors[WS_MAX_MONITORS];
+		unsigned n_monitors;
+		/// The workspace that had the focus, NULL if none.
+		char *current;
+		/// The round of SHOW we are in.
+		unsigned round;
+		/// Where the pointer was when we started, if it was on our screen.
+		bool pointer_saved;
+		int16_t pointer_x, pointer_y;
+		/// The commands that wait for us to be done, see ws_warm_command.
+		xcb_window_t *waiters;
+		unsigned n_waiters;
+		struct ws_watch *watch;
+		unsigned n_watch;
+	} warm;
 };
 
 extern struct ws_state wsd;
@@ -370,13 +423,19 @@ bool ws_start_passes(void);
 bool ws_backdrops_init(void);
 const char *ws_backdrop_workspace(xcb_window_t w);
 void ws_backdrops_update(void);
+void ws_backdrops_redo(void);
 void ws_backdrops_advance(void);
 bool ws_backdrops_showing(void);
 unsigned ws_backdrops_start(const struct ws_monitor *m, const char *trigger,
                             uint64_t first, uint64_t last);
 
-// overview.c
+// warm.c
+void ws_prune_keepers(void);
+void ws_warm_advance(void);
+void ws_warm_check(void);
+void ws_warm_command(xcb_window_t reply);
 
+// overview.c
 bool ws_any_unfolded(void);
 void ws_answer(xcb_window_t w, uint32_t code, uint32_t detail);
 void ws_pick_done(void);

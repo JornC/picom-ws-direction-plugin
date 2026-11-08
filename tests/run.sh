@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Test harness for the ws-direction picom plugin, and so for the picom plugin API it builds
 # on (animation variables, frame callbacks, start_animation, window_has_image,
-# add_animation_trigger, pause_screen, add_wakeup_fd and window_at: plugin API 0.9).
+# add_animation_trigger, pause_screen, add_wakeup_fd, window_at and window_keeps_image:
+# plugin API 0.9).
 #
 # Setup: a nested Xvfb with two monitors (DPT 3440x1440 at +0+480, HDT 1080x1920 at
 # +3440+0). It checks that the command prints its version and exits 2 on wrong
@@ -27,7 +28,13 @@
 # workspaces in between, it is still part of no switch: the plugin didn't start it. Then
 # it checks that the plugin itself starts the custom trigger ws-pass on the xterms of the
 # workspaces a switch passes, in the pass of the switch, and takes a screenshot halfway
-# through such a switch. The harness runs on a D-Bus session bus of its own.
+# through such a switch. Last it restarts i3 and changes picom's config, which leave picom
+# without images of the hidden workspaces, and checks that the plugin gets them back by
+# itself, with the screen, the keyboard and the pointer frozen, that it puts the pointer
+# back, and that it waits for a window that paints itself late (tests/slowpaint.c). And
+# that "ws-direction warm" gets them back when asked, also at picom's start, and "warm
+# --auto off" stops the plugin from doing it by itself. The harness runs on a D-Bus
+# session bus of its own.
 #
 # Phase 2: i3 is replaced by fakewm.c, a tiny stand-in window manager. It can spread one
 # workspace switch over several picom frames, and set up cases i3 won't produce on demand
@@ -91,12 +98,13 @@ die() {
 [[ ${#SOCK} -le 107 ]] || die "socket path too long (${#SOCK} bytes): $SOCK"
 [[ -n $PICOM && -x $PICOM ]] || die "picom not found, set PICOM"
 for tool in "$I3" Xvfb xrandr i3-msg xterm xdotool xprop import magick cc pkg-config \
-	dbus-send; do
+	dbus-send jq; do
 	command -v "$tool" >/dev/null || die "missing tool: $tool"
 done
 [[ ! -e /tmp/.X${DISP#:}-lock ]] || die "display $DISP is already in use"
 mkdir -p "$OUT" || die "cannot create $OUT"
 rm -f "$OUT"/*.log "$OUT"/*.out "$SOCK"
+rm -rf "$WORK/i3"
 [[ -f $PLUGIN ]] || die "plugin not found: $PLUGIN (run make)"
 # picom loads a plugin by its full path, and /proc/<pid>/maps shows that path.
 PLUGIN=$(realpath "$PLUGIN")
@@ -438,6 +446,8 @@ xrandr --setmonitor HDT 1080/300x1920/530+3440+0 none >/dev/null
 
 read -ra XCB_FLAGS <<<"$(pkg-config --cflags --libs xcb)"
 cc -O2 -Wall -o "$OUT/fakewm" "$HERE/fakewm.c" "${XCB_FLAGS[@]}" || die "cannot build fakewm"
+cc -O2 -Wall -o "$OUT/slowpaint" "$HERE/slowpaint.c" "${XCB_FLAGS[@]}" ||
+	die "cannot build slowpaint"
 
 # The command prints its version, and exits 2 on wrong arguments, without picom.
 CMD_VERSION=$("$ROOT/build/ws-direction" --version 2>&1)
@@ -550,13 +560,16 @@ assign [instance="^ws3\$"] workspace "3:Term"
 assign [instance="^ws4\$"] workspace "4:Misc"
 assign [instance="^ws5\$"] workspace "5:Music"
 assign [instance="^ws7\$"] workspace "7:Extra"
+assign [instance="^slow\$"] workspace "7:Extra"
 assign [instance="^hang\$"] workspace "3:Term"
 for_window [instance="^hang\$"] floating enable, resize set 888 px 400 px, move position 3677 px 100 px
 assign [instance="^notes\$"] workspace "Notes"
 assign [instance="^alpha\$"] workspace "Alpha"
 for_window [instance="^scratch\$"] move scratchpad
 EOF
-run_bg "$OUT/i3.log" "$I3" -c "$OUT/i3.conf"
+# i3 keeps its error log, and its layout across a restart, in $XDG_RUNTIME_DIR/i3. Keep
+# them here, not next to the files of the real i3.
+run_bg "$OUT/i3.log" env XDG_RUNTIME_DIR="$WORK" "$I3" -c "$OUT/i3.conf"
 I3_PID=$LAST_PID
 wait_until 10 i3-msg -s "$SOCK" -t get_version || die "i3 did not start, see $OUT/i3.log"
 outputs=$(i3-msg -s "$SOCK" -t get_outputs)
@@ -1082,6 +1095,218 @@ sleep "$SETTLE"
 start_picom "$OUT/no-open.conf" picom-no-open
 i3_case "seed: first switch is HDT 3->5 while DPT shows 7, no open animations" \
 	'workspace 5:Music' "ws3-a hide 1"
+stop_picom
+
+# An i3 restart puts every window in a new frame, and picom has no image of the new frames
+# of hidden workspaces. A picom config change drops all images too. The plugin sees
+# hidden windows lose the image picom kept of them, and shows their workspaces once, with
+# the screen and the keyboard frozen, then goes back. DPT shows the empty workspace 8 for
+# the screenshots, so nothing else is drawn where ws2-a would be.
+shown_workspaces() {
+	i3-msg -s "$SOCK" -t get_workspaces |
+		jq -r '.[] | select(.visible) | "\(.output) \(.name) focused=\(.focused)"' | sort
+}
+# wave_ws2 NAME DRAWN: show the empty workspace 8 on DPT, start wave on ws2-a, and check
+# that it is drawn (DRAWN 1) or not (0).
+wave_ws2() {
+	local got drawn=0
+	i3cmd 'workspace 8'
+	sleep "$SETTLE"
+	start_wave "$(win_id ws2-a)"
+	sleep 0.7
+	import -window root "$OUT/shot.png"
+	got=$(pixel 1720 1200)
+	[[ $got == "#0000FF" ]] && drawn=1
+	if [[ $reply == *"uint32 1"* && $drawn == "$2" ]]; then
+		pass "$1"
+	else
+		fail "$1" "pixel $got, reply: ${reply//$'\n'/ }"
+	fi
+	sleep 2
+}
+# warm_case NAME MARK BEFORE: after line MARK, the plugin got the images back: it showed
+# workspaces with the screen frozen, no animation started meanwhile, and the workspaces
+# shown are BEFORE again.
+# Every window draws all of itself in time (slow-a too, at 150 ms), and the plugin takes
+# well under its limit of 0.5 s per workspace it shows: 0.25 s.
+warm_case() {
+	local lines shown first last starts late ms n
+	wait_until 10 grep -q "Warm: done" <(tail -n +"$(($2 + 1))" "$LOG")
+	sleep "$SETTLE"
+	lines=$(tail -n +"$(($2 + 1))" "$LOG")
+	shown=$(grep -oE 'Warm: will show "[^"]+"' <<<"$lines" | cut -d'"' -f2 | sort | tr '\n' ' ')
+	first=$(grep -n -m1 "lost their image" <<<"$lines" | cut -d: -f1)
+	last=$(grep -n -m1 "Warm: done" <<<"$lines" | cut -d: -f1)
+	starts=$( (sed -n "${first:-1},${last:-1}p" <<<"$lines" | grep -c "Starting animation") || true)
+	late=$( (grep -c "did not draw all of itself in time" <<<"$lines") || true)
+	ms=$(grep -oE 'done in [0-9]+ ms' <<<"$lines" | head -n 1 | grep -oE '[0-9]+')
+	n=$( (grep -c 'Warm: will show' <<<"$lines") || true)
+	if [[ -n $first && -n $last && $starts == 0 && $(shown_workspaces) == "$3" &&
+		$late == 0 && -n $ms ]] && ((ms < n * 250)); then
+		pass "$1 (showed: $shown$(grep -oE 'done in [0-9]+ ms' <<<"$lines"))"
+	else
+		fail "$1" "lost line ${first:-none}, done line ${last:-none}, $starts animations meanwhile" \
+			"$late windows did not draw in time; done in ${ms:-?} ms for $n workspaces" \
+			"workspaces before: $(tr '\n' ' ' <<<"$3")" \
+			"workspaces after:  $(shown_workspaces | tr '\n' ' ')"
+	fi
+}
+# warm_probe MARK: wait until the plugin froze the screen after line MARK, then try to
+# grab the pointer and the keyboard ourselves. Sets PROBE to fakewm's answer, and
+# PROBE_LATE to the number of "Warm: done" lines the log had by then.
+warm_probe() {
+	local deadline=$((SECONDS + 10))
+	until sed -n "$(($1 + 1)),\$p" "$LOG" | grep -q "Warm: .* freezing the screen"; do
+		((SECONDS < deadline)) || break
+		sleep 0.02
+	done
+	PROBE=$("$OUT/fakewm" grabprobe 2>&1)
+	PROBE_LATE=$(sed -n "$(($1 + 1)),\$p" "$LOG" | grep -c "Warm: done")
+}
+# slow-a, on 7:Extra, paints itself 150 ms after each expose, well within the plugin's
+# limit of 0.5 s. The X server paints it red when it maps, which is not its drawing.
+run_bg /dev/null "$OUT/slowpaint" slow slow-a 150
+I3_XTERMS+=("$LAST_PID")
+wait_until 10 has_window slow-a || die "slow-a did not appear"
+start_picom "$OUT/wave.conf" picom-warm
+# Every workspace with an xterm shows once under this picom, so the plugin sees picom keep
+# their images. Then the monitors stay calm for a second.
+for ws in 2:Web 4:Misc 7:Extra 5:Music 3:Term 1:IDE; do
+	i3cmd "workspace $ws"
+	sleep "$SETTLE"
+done
+sleep 1.5
+before=$(shown_workspaces)
+# From the restart on, i3 moves the pointer to the monitor that gets the focus, which a
+# workspace on the other monitor gets while the plugin shows it.
+sed -i 's/^mouse_warping none$/mouse_warping output/' "$OUT/i3.conf"
+xdotool mousemove 200 900
+mark=$(log_mark)
+i3-msg -s "$SOCK" restart >/dev/null 2>&1
+warm_probe "$mark"
+wait_until 10 i3-msg -s "$SOCK" -t get_version || die "i3 did not come back after a restart"
+warm_case "i3 restart: the plugin shows the hidden workspaces once, frozen, and goes back" \
+	"$mark" "$before"
+if [[ $PROBE =~ ^pointer\ ([0-9-]+)\ keyboard\ ([0-9-]+)$ ]] &&
+	((BASH_REMATCH[1] > 0 && BASH_REMATCH[2] > 0 && PROBE_LATE == 0)); then
+	pass "  (meanwhile the pointer and the keyboard are frozen: $PROBE)"
+else
+	fail "  (meanwhile the pointer and the keyboard are frozen)" \
+		"fakewm grabprobe: ${PROBE:-nothing}, done lines before it: $PROBE_LATE"
+fi
+location=$(xdotool getmouselocation | sed -nE 's/^x:([0-9]+) y:([0-9]+) .*/\1,\2/p')
+if [[ $location == 200,900 ]]; then
+	pass "  (the pointer is back where it was, though i3 moved it)"
+else
+	fail "  (the pointer is back where it was, though i3 moved it)" "at $location, not 200,900"
+fi
+wave_ws2 "  (screenshot: a hidden xterm is drawn after the i3 restart)" 1
+# picom's image of slow-a is copied when picom binds it (Xvfb's GLX), so a screenshot
+# can't show its late paint: the plugin's log says when picom saw it draw all of itself.
+slow_ms=$(sed -n "$((mark + 1)),\$p" "$LOG" | grep -m1 "Warm: window $(printf '%#010x' "$(win_id slow-a)") drew all" |
+	sed -nE 's/.* in ([0-9]+) ms$/\1/p')
+if [[ -n $slow_ms ]] && ((slow_ms >= 150)); then
+	pass "  (the plugin waits for a window that paints itself 150 ms after it shows: $slow_ms ms)"
+else
+	fail "  (the plugin waits for a window that paints itself 150 ms after it shows)" \
+		"logged: ${slow_ms:-nothing}"
+fi
+
+# DPT shows the empty 8 now. i3 removes an empty workspace once it is hidden, so the plugin
+# can't go back to it, and leaves DPT alone until it shows a workspace with windows. Then
+# it starts in the pass of that switch.
+sleep 1.5
+i3-msg -s "$SOCK" restart >/dev/null 2>&1
+sleep 1
+wait_until 10 i3-msg -s "$SOCK" -t get_version || die "i3 did not come back after a restart"
+sleep 2
+wave_ws2 "i3 restart on an empty workspace: DPT's hidden xterms stay without images" 0
+mark=$(log_mark)
+i3cmd 'workspace 1:IDE'
+warm_case "  (once DPT shows a workspace with windows, the plugin gets them back)" \
+	"$mark" $'DPT 1:IDE focused=true\nHDT 3:Term focused=false'
+wave_ws2 "  (screenshot: then the hidden xterm is drawn)" 1
+
+# A config change: picom starts over, and drops every image.
+i3cmd 'workspace 1:IDE'
+sleep 1.5
+before=$(shown_workspaces)
+mark=$(log_mark)
+: >>"$OUT/wave.conf"
+warm_case "picom config change: the plugin gets the images back" "$mark" "$before"
+wave_ws2 "  (screenshot: a hidden xterm is drawn after the config change)" 1
+i3cmd 'workspace 1:IDE'
+sleep "$SETTLE"
+stop_picom
+
+# When to get images back is the user's choice. A picom that starts has no images of the
+# hidden workspaces, and the plugin doesn't show them by itself; "ws-direction warm"
+# does, and returns once it is done.
+start_picom "$OUT/wave.conf" picom-warm-command
+wave_ws2 "a new picom has no images of hidden workspaces, the plugin leaves them" 0
+i3cmd 'workspace 1:IDE'
+sleep "$SETTLE"
+mark=$(log_mark)
+warm_out=$("$ROOT/build/ws-direction" warm 2>&1)
+warm_status=$?
+lines=$(tail -n +"$((mark + 1))" "$LOG")
+if ((warm_status == 0)) && grep -q "Warm: .* as asked, freezing" <<<"$lines" &&
+	grep -q "Warm: done" <<<"$lines" && [[ -z $warm_out ]] &&
+	! grep -q "did not draw all of itself in time" <<<"$lines"; then
+	pass "ws-direction warm gets the images back, and returns when done ($(grep -oE 'done in [0-9]+ ms' <<<"$lines"))"
+else
+	fail "ws-direction warm gets the images back, and returns when done" \
+		"exit status $warm_status, output: $warm_out, see $LOG"
+fi
+wave_ws2 "  (screenshot: then a hidden xterm is drawn)" 1
+i3cmd 'workspace 1:IDE'
+sleep "$SETTLE"
+mark=$(log_mark)
+warm_out=$("$ROOT/build/ws-direction" warm 2>&1)
+warm_status=$?
+if ((warm_status == 0)) && tail -n +"$((mark + 1))" "$LOG" |
+	grep -q "Warm: asked, and every hidden window has an image"; then
+	pass "  (asked again, it has nothing to do, and returns at once)"
+else
+	fail "  (asked again, it has nothing to do, and returns at once)" \
+		"exit status $warm_status, output: $warm_out"
+fi
+"$ROOT/build/ws-direction" overview open || die "ws-direction overview open failed"
+sleep "$SETTLE"
+warm_out=$("$ROOT/build/ws-direction" warm 2>&1)
+warm_status=$?
+"$ROOT/build/ws-direction" overview close || die "ws-direction overview close failed"
+sleep "$SETTLE"
+if ((warm_status == 1)) && [[ $warm_out == *"overview"* ]]; then
+	pass "  (not while the overview is open: $warm_out)"
+else
+	fail "  (not while the overview is open)" "exit status $warm_status, output: $warm_out"
+fi
+
+# "ws-direction warm --auto off" sets a root window property, without picom, and then
+# the plugin doesn't get images back by itself after a config change; "on" again does.
+auto_status=0
+"$ROOT/build/ws-direction" warm --auto off || auto_status=$?
+mark=$(log_mark)
+: >>"$OUT/wave.conf"
+sleep 3
+if ((auto_status == 0)) && [[ $(xprop -root _WS_DIRECTION_WARM) == *'"off"'* ]] &&
+	! tail -n +"$((mark + 1))" "$LOG" | grep -q "Warm: .* freezing"; then
+	pass "warm --auto off: after a config change the plugin leaves the images"
+else
+	fail "warm --auto off: after a config change the plugin leaves the images" \
+		"exit status $auto_status, $(xprop -root _WS_DIRECTION_WARM), see $LOG"
+fi
+wave_ws2 "  (screenshot: a hidden xterm is not drawn)" 0
+i3cmd 'workspace 1:IDE'
+sleep "$SETTLE"
+"$ROOT/build/ws-direction" warm || die "ws-direction warm failed"
+"$ROOT/build/ws-direction" warm --auto on || die "ws-direction warm --auto on failed"
+sleep "$SETTLE"
+before=$(shown_workspaces)
+mark=$(log_mark)
+: >>"$OUT/wave.conf"
+warm_case "  (warm --auto on: the plugin does it by itself again)" "$mark" "$before"
 stop_picom
 
 stop "${I3_XTERMS[@]}"

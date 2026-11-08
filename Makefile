@@ -1,10 +1,10 @@
 # picom plugin: workspace slide direction and workspace monitor for animation scripts, and
 # the ws-direction command that a window manager config calls.
 # Needs plugin API 0.9 of the picom fork (add_animation_variable, add_frame_callback,
-# start_animation, window_has_image, add_animation_trigger, pause_screen, add_wakeup_fd
-# and window_at). make finds the installed picom's headers with pkg-config picom-api. If
-# the installed picom doesn't have the API, point PICOM_API_CFLAGS at a picom tree that
-# does, e.g.
+# start_animation, window_has_image, add_animation_trigger, pause_screen, add_wakeup_fd,
+# window_at and window_keeps_image). make finds the installed picom's headers
+# with pkg-config picom-api. If the installed picom doesn't have the API, point
+# PICOM_API_CFLAGS at a picom tree that does, e.g.
 #   make PICOM_API_CFLAGS=-I/path/to/picom/include
 PKG_CONFIG ?= pkg-config
 # picom-api.pc's Cflags name include/picom, but the code includes <picom/api.h>, so the
@@ -37,8 +37,8 @@ ifneq ($(SANITIZE),)
 override CFLAGS += -fsanitize=$(SANITIZE) -fno-sanitize-recover=all -fno-omit-frame-pointer
 endif
 override CFLAGS += -std=gnu23 -Wall -Wextra -Wfatal-errors -Ibuild $(PICOM_API_CFLAGS) \
-	$(shell $(PKG_CONFIG) --cflags xcb xcb-randr)
-LDLIBS = $(shell $(PKG_CONFIG) --libs xcb xcb-randr)
+	$(shell $(PKG_CONFIG) --cflags xcb xcb-damage xcb-randr xcb-xfixes)
+LDLIBS = $(shell $(PKG_CONFIG) --libs xcb xcb-damage xcb-randr xcb-xfixes)
 
 # The plugin is every file in src/ but cmd.c, which is the command.
 PLUGIN_OBJS = $(patsubst src/%.c,build/%.o,$(filter-out src/cmd.c,$(wildcard src/*.c)))
@@ -63,7 +63,7 @@ build/%.o: src/%.c
 # The unit tests check the logic that works on the plugin's state, without an X server.
 # They link the modules that hold it; tests/unit/fixture.c stands in for plugin.c.
 UNIT_OBJS = $(patsubst tests/unit/%.c,build/unit/%.o,$(wildcard tests/unit/*.c))
-UNIT_MODULES = build/desktop.o build/passes.o build/overview.o build/backdrop.o
+UNIT_MODULES = build/desktop.o build/passes.o build/overview.o build/backdrop.o build/warm.o
 
 build/unit/%.o: tests/unit/%.c
 	@mkdir -p build/unit

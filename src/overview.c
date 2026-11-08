@@ -494,6 +494,10 @@ void ws_run_commands(void) {
 				wsd.waiters[wsd.n_waiters++] =
 				    (struct ws_waiter){.window = reply, .flags = flags};
 			}
+		} else if (command == WS_COMMAND_WARM) {
+			// Answered once the images are back.
+			ws_warm_command(reply);
+			continue;
 		} else if (command == WS_COMMAND_CLOSE || command == WS_COMMAND_TOGGLE) {
 			// A command that waits hears of every close and toggle, whatever
 			// it does.

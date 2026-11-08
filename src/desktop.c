@@ -218,6 +218,7 @@ void ws_read_start(void) {
 	                             UINT32_MAX / 4),
 	    .list = ws_prop_request(wsd.root, wsd.a_client_list, XCB_ATOM_WINDOW,
 	                            UINT32_MAX / 4),
+	    .warm = ws_prop_request(wsd.root, wsd.a_warm, XCB_ATOM_STRING, 1),
 	    .screen = xcb_get_geometry(wsd.c, wsd.root),
 	    .monitors = xcb_randr_get_monitors(wsd.c, wsd.root, 1),
 	    .tree = xcb_query_tree(wsd.c, wsd.root),
@@ -319,6 +320,7 @@ static void ws_read_drop(void) {
 	xcb_discard_reply(wsd.c, wsd.read.current.sequence);
 	auto root = &wsd.read.root;
 	free(ws_reply(root->viewports.sequence));
+	free(ws_reply(root->warm.sequence));
 	free(ws_reply(root->screen.sequence));
 	free(ws_reply(root->monitors.sequence));
 	free(wsd.read.names);
@@ -382,6 +384,12 @@ static void ws_take_root(void) {
 		memcpy(wsd.viewports, xcb_get_property_value(viewports), wsd.n_viewports * 4);
 	}
 	free(viewports);
+
+	auto warm = ws_prop_reply(root->warm);
+	wsd.warm_off = warm != NULL && warm->format == 8 &&
+	               xcb_get_property_value_length(warm) == 3 &&
+	               memcmp(xcb_get_property_value(warm), "off", 3) == 0;
+	free(warm);
 
 	xcb_get_geometry_reply_t *screen = ws_reply(root->screen.sequence);
 	if (screen != NULL) {

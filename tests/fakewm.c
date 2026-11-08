@@ -18,6 +18,8 @@
 //                         handles the requests of no other client, though they still
 //                         get the events of our steps, like a server busy with a switch
 //   sleep MS              wait
+//   grabprobe             try to grab the pointer and the keyboard, let go, and print
+//                         "pointer N keyboard N", N the grab status (0: they were free)
 //
 // Build: cc -o fakewm fakewm.c $(pkg-config --cflags --libs xcb)
 
@@ -155,6 +157,25 @@ int main(int argc, char **argv) {
 			xcb_grab_server(c);
 		} else if (strcmp(step, "ungrab") == 0) {
 			xcb_ungrab_server(c);
+		} else if (strcmp(step, "grabprobe") == 0) {
+			xcb_grab_pointer_reply_t *p = xcb_grab_pointer_reply(
+			    c,
+			    xcb_grab_pointer(c, 0, root, 0, XCB_GRAB_MODE_ASYNC,
+			                     XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE,
+			                     XCB_CURRENT_TIME),
+			    NULL);
+			xcb_grab_keyboard_reply_t *k = xcb_grab_keyboard_reply(
+			    c,
+			    xcb_grab_keyboard(c, 0, root, XCB_CURRENT_TIME,
+			                      XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC),
+			    NULL);
+			printf("pointer %d keyboard %d\n", p ? p->status : -1,
+			       k ? k->status : -1);
+			fflush(stdout);
+			xcb_ungrab_pointer(c, XCB_CURRENT_TIME);
+			xcb_ungrab_keyboard(c, XCB_CURRENT_TIME);
+			free(p);
+			free(k);
 		} else if (strcmp(step, "sleep") == 0) {
 			xcb_flush(c);
 			sleep_ms(strtol(next(argc, argv, &i), NULL, 10));

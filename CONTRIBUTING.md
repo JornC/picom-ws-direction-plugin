@@ -25,7 +25,7 @@ If neither gives the headers, `make` stops with a message that says so. Headers 
 the plugin API the plugin needs stop the build at the check in `src/ws_direction.h`.
 
 The code is C23 (`-std=gnu23`): GCC 14 or clang 18 and later. It needs pkg-config and the
-headers of xcb and xcb-randr.
+headers of xcb, xcb-damage, xcb-randr and xcb-xfixes.
 
 The version is in the file `VERSION`. In a git checkout, `make` adds what `git describe`
 says: `0.1.0-12-gabc1234` once the tag `v0.1.0` exists, `0.1.0-gabc1234` before that,
@@ -66,14 +66,14 @@ Variables:
 
 ### Unit tests
 
-`tests/unit` has 78 tests of the logic that works on the plugin's state: which monitor a
+`tests/unit` has 79 tests of the logic that works on the plugin's state: which monitor a
 workspace is on, the order of a monitor's workspaces, the steps of a switch, which
 workspace each monitor shows, which switch each show and hide is part of, and the
 variables, through `ws_compute`. They run in about 10 ms, without an X server. They link
-`desktop.o`, `passes.o`, `overview.o` and `backdrop.o`; `tests/unit/fixture.c` stands in
-for `plugin.c` (the state, a log into a buffer and a fake clock), gives a picom API that
-records the animations started, and plays what a window manager does: maps, unmaps and
-changes of the current desktop, as the events a read takes in.
+`desktop.o`, `passes.o`, `overview.o`, `backdrop.o` and `warm.o`; `tests/unit/fixture.c`
+stands in for `plugin.c` (the state, a log into a buffer and a fake clock), gives a
+picom API that records the animations started, and plays what a window manager does:
+maps, unmaps and changes of the current desktop, as the events a read takes in.
 
 `tests/unit/test.h` is the runner, about 100 lines. Write a test as `TEST(name) { ... }`
 in any `tests/unit/*.c`; the runner finds it. `CHECK`, `CHECK_INT`, `CHECK_STR` and
@@ -81,8 +81,8 @@ in any `tests/unit/*.c`; the runner finds it. `CHECK`, `CHECK_INT`, `CHECK_STR` 
 `-Werror`, and with ASan and UBSan.
 
 Without X the unit tests can't reach `desktop.c`'s reading of the X server's replies,
-the clicks and the commands in `overview.c`, `plugin.c`'s frame callback and
-constructor, or `cmd.c`. The harness covers those.
+`warm.c`, the clicks and the commands in `overview.c`, `plugin.c`'s frame callback
+and constructor, or `cmd.c`. The harness covers those.
 
 ### The harness
 
@@ -130,6 +130,7 @@ fonts.
 - `src/desktop.c`: reads the monitors, the workspaces and the managed windows from the
   X server.
 - `src/passes.c`: finds switches, starts `ws-pass`, and works out the variables.
+- `src/warm.c`: gets the images of hidden workspaces back.
 - `src/overview.c`: unfolds and folds the overview, takes the clicks, and does the
   commands.
 - `src/backdrop.c`: the backdrops, one window per workspace.

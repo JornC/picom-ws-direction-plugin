@@ -1,7 +1,7 @@
 .\" SPDX-License-Identifier: MPL-2.0
 .TH WS-DIRECTION 1 2026-11-01 "ws-direction 0.2.0" "User Commands"
 .SH NAME
-ws\-direction \- open and close the workspace overview of the ws-direction picom plugin
+ws\-direction \- control the overview and the images of the ws-direction picom plugin
 .SH SYNOPSIS
 .B ws\-direction overview open
 .RB [ \-\-all " | " \-\-output
@@ -11,6 +11,9 @@ ws\-direction \- open and close the workspace overview of the ws-direction picom
 .B ws\-direction overview close
 .br
 .B ws\-direction overview toggle
+.br
+.B ws\-direction warm
+.RB [ \-\-auto " " on | off ]
 .br
 .B ws\-direction \-\-version
 .SH DESCRIPTION
@@ -58,6 +61,35 @@ on their windows.
 .TP
 .B overview toggle
 Close when the monitor with the focus is unfolded, else open.
+.TP
+.B warm
+Get the images of hidden windows back now.
+On every monitor that shows a workspace with windows, the plugin shows each hidden
+workspace that has a window picom has no image of, one at a time, with the screen, the
+keyboard and the pointer frozen, asks their windows to draw again, waits until they drew
+all of themselves and picom has their images (at most 0.5 s per workspace), and goes
+back.
+It returns once that is done, so a key can run it before
+.BR "overview open" .
+It fails while a monitor is unfolded, and when another program holds the keyboard or the
+pointer.
+.IP
+The plugin does this by itself when picom loses the images of hidden windows it kept,
+after a change to picom's config or a window manager restart, but not when picom starts.
+Afterwards i3's
+.B workspace back_and_forth
+goes to the last workspace it showed.
+.TP
+.BR "warm \-\-auto on" | off
+Whether the plugin gets images back by itself; on by default.
+The command sets the root window property
+.B \%_WS_DIRECTION_WARM
+to
+.B on
+or
+.BR off ,
+which the plugin reads: it needs no picom, holds across picom restarts, and lasts until
+the X server ends.
 .SH OPTIONS
 .TP
 .B \-\-all
@@ -107,7 +139,7 @@ any other arguments print the usage to standard error, with exit status 2.
 .SH EXIT STATUS
 .TP
 .B 0
-The plugin did the command, or the version was printed.
+The plugin did the command, the property was set, or the version was printed.
 With
 .BR \-\-wait ,
 a click on a window closed the overview.
@@ -209,7 +241,9 @@ so the config doesn't list them in
 .PP
 The command and the plugin talk through the selection
 .BR \%_WS_DIRECTION_S \fIscreen\fR,
-which the plugin owns, and client messages, which may change between versions.
+which the plugin owns, client messages, and the root window property
+.BR \%_WS_DIRECTION_WARM ,
+which may change between versions.
 Use the command.
 .SH ANIMATION VARIABLES
 picom asks the plugin for these when an animation whose script reads one starts.
@@ -323,6 +357,28 @@ while :; do
     *) exit ;;
     esac
 done
+.fi
+.RE
+.PP
+Images of every hidden workspace when picom starts
+.RB ( picom\ \-b
+returns once the plugin listens):
+.PP
+.RS 4
+.nf
+exec_always \-\-no\-startup\-id picom \-b && ws\-direction warm
+.fi
+.RE
+.PP
+For them before the overview opens too, run
+.B ws\-direction warm
+first in the script above.
+.PP
+Images only when asked:
+.PP
+.RS 4
+.nf
+exec_always \-\-no\-startup\-id ws\-direction warm \-\-auto off
 .fi
 .RE
 .PP

@@ -7,6 +7,11 @@
 /// window one client message per command, of type _WS_DIRECTION_COMMAND, and the plugin
 /// answers with client messages of type _WS_DIRECTION_ANSWER to the window the command
 /// names. Both may change with the version: the command is the interface.
+///
+/// The command also sets the root window property _WS_DIRECTION_WARM, which says whether
+/// the plugin gets the images of hidden windows back by itself: a STRING, "on" (the
+/// default, also when the property is not there) or "off". A property, so it holds while
+/// picom doesn't run, and across picom restarts.
 
 #pragma once
 
@@ -15,6 +20,7 @@
 #define WS_PROTOCOL_VERSION 1
 #define WS_COMMAND_MESSAGE "_WS_DIRECTION_COMMAND"
 #define WS_ANSWER_MESSAGE "_WS_DIRECTION_ANSWER"
+#define WS_WARM_PROPERTY "_WS_DIRECTION_WARM"
 
 /// A command, format 32: data32[0] is one of these, data32[1] a target, data32[2] the
 /// atom of the RandR name of a monitor for WS_TARGET_OUTPUT, data32[3] the window to
@@ -23,6 +29,8 @@ enum ws_command {
 	WS_COMMAND_OPEN = 1,
 	WS_COMMAND_CLOSE = 2,
 	WS_COMMAND_TOGGLE = 3,
+	/// Get the images of hidden windows back now. Answered once that is done.
+	WS_COMMAND_WARM = 4,
 };
 
 /// Which monitors open: the one with the focus, every one, or one by name.

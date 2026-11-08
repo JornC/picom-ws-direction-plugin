@@ -362,6 +362,16 @@ TEST(switch_shown_workspace_gone_is_logged) {
 	CHECK_HAS(test_log, "we don't know which of its workspaces it shows");
 }
 
+TEST(switch_not_while_getting_images_back) {
+	two_monitors();
+	wsd.warm.step = WS_WARM_SHOW;
+	fx_switch(1);
+	CHECK_INT(fx_tracked(0)->n_switches, 0);
+	CHECK_STR(fx_tracked(0)->shown, "1");
+	CHECK_INT(fx_client(0x102)->last_show, 0);
+	wsd.warm.step = WS_WARM_IDLE;
+}
+
 TEST(switch_without_a_current_desktop) {
 	// The windows on screen tell.
 	fx_reset();

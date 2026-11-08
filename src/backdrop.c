@@ -14,7 +14,7 @@
 /// hidden again. picom draws it only in an animation, and only when the style's rule for
 /// it keeps that image (keep-image-when-hidden): a style without a rule for the class
 /// "ws-direction-backdrop" never sees it. We show it again when its monitor or the
-/// wallpaper changes.
+/// wallpaper changes, and when picom lost the images of hidden windows (see warm.c).
 
 #include <stdlib.h>
 #include <string.h>
@@ -196,6 +196,13 @@ void ws_backdrops_update(void) {
 	}
 	wsd.wallpaper_changed = false;
 	xcb_flush(wsd.c);
+}
+
+/// Show every backdrop again, so picom gets its image back.
+void ws_backdrops_redo(void) {
+	for (unsigned i = 0; i < wsd.n_backdrops; i++) {
+		wsd.backdrops[i].stale = true;
+	}
 }
 
 /// Whether a backdrop is shown for picom to get its image: picom must then run passes,

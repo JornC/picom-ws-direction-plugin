@@ -332,6 +332,11 @@ static void ws_saw_shown(struct ws_scan *scan, struct ws_scan_monitor *sm,
 		       r.x1, r.y1, source);
 		return;
 	}
+	// The switches we make to get images back are not switches: we go back to where
+	// we were, and draw nothing meanwhile.
+	if (wsd.warm.step != WS_WARM_IDLE) {
+		return;
+	}
 	ws_add_switch(scan, sm, name, at, source);
 }
 
@@ -466,6 +471,7 @@ void ws_reconcile(struct ws_client *prev, unsigned n_prev, struct ws_event *even
 	    current != NULL
 	        ? ws_scan_monitor(&scan, ws_desktop_monitor((unsigned)wsd.current))
 	        : NULL;
+	bool warm = wsd.warm.step != WS_WARM_IDLE;
 
 	for (unsigned i = 0; i < n_events; i++) {
 		auto e = &events[i];
@@ -498,12 +504,12 @@ void ws_reconcile(struct ws_client *prev, unsigned n_prev, struct ws_event *even
 				ws_saw_shown(&scan, sm, c->workspace, (int)i, source);
 			}
 			sc->viewable = true;
-			c->last_show = c->pending_show;
+			c->last_show = warm ? 0 : c->pending_show;
 			c->pending_show = 0;
 			ws_realize(c->last_show);
 		} else {
 			sc->viewable = false;
-			c->last_hide = c->pending_hide;
+			c->last_hide = warm ? 0 : c->pending_hide;
 			c->pending_hide = 0;
 			ws_realize(c->last_hide);
 			sc->unmapped_at = c->last_hide == 0 ? (int)i : -1;
@@ -531,11 +537,11 @@ void ws_reconcile(struct ws_client *prev, unsigned n_prev, struct ws_event *even
 		auto sc = &scan.clients[i];
 		if (sc->existed && sc->viewable != c->viewable) {
 			if (c->viewable) {
-				c->last_show = c->pending_show;
+				c->last_show = warm ? 0 : c->pending_show;
 				c->pending_show = 0;
 				ws_realize(c->last_show);
 			} else {
-				c->last_hide = c->pending_hide;
+				c->last_hide = warm ? 0 : c->pending_hide;
 				c->pending_hide = 0;
 				ws_realize(c->last_hide);
 			}

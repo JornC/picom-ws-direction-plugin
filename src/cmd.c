@@ -17,6 +17,15 @@
 ///       Closes the overview on every monitor, or does whichever changes the monitor
 ///       with the focus.
 ///
+///   ws-direction warm
+///       Gets the images of hidden windows back now: the plugin shows each hidden
+///       workspace that has a window picom has no image of, and goes back. Returns once
+///       that is done.
+///
+///   ws-direction warm --auto on | off
+///       Whether the plugin does that by itself when picom loses the images. Sets the
+///       root window property protocol.h names, so it needs no picom.
+///
 ///   ws-direction --version
 ///       Prints the version.
 ///
@@ -37,6 +46,7 @@ static int usage(void) {
 	fputs("usage: ws-direction overview open [--all | --output NAME] [--wait "
 	      "[--buttons]]\n"
 	      "       ws-direction overview close | toggle\n"
+	      "       ws-direction warm [--auto on | off]\n"
 	      "       ws-direction --version\n",
 	      stderr);
 	return 2;
@@ -110,13 +120,38 @@ static const char *failure(uint32_t reason) {
 	}
 }
 
+/// Set whether the plugin gets images back by itself, in the root window property.
+static int set_auto_warm(xcb_connection_t *c, xcb_window_t root, const char *value) {
+	xcb_atom_t property = atom(c, WS_WARM_PROPERTY);
+	if (property == XCB_ATOM_NONE) {
+		return fail(c, "cannot intern the atoms");
+	}
+	auto cookie = xcb_change_property_checked(c, XCB_PROP_MODE_REPLACE, root,
+	                                          property, XCB_ATOM_STRING, 8,
+	                                          (uint32_t)strlen(value), value);
+	xcb_generic_error_t *error = xcb_request_check(c, cookie);
+	if (error != NULL) {
+		free(error);
+		return fail(c, "cannot set the root window property");
+	}
+	xcb_disconnect(c);
+	return 0;
+}
+
 int main(int argc, char **argv) {
 	if (argc == 2 && strcmp(argv[1], "--version") == 0) {
 		puts("ws-direction " WS_DIRECTION_VERSION);
 		return 0;
 	}
 	struct command cmd = {0};
-	if (argc < 3 || strcmp(argv[1], "overview") != 0 || !parse(argc - 2, argv + 2, &cmd)) {
+	const char *auto_warm = NULL;
+	if (argc == 2 && strcmp(argv[1], "warm") == 0) {
+		cmd.command = WS_COMMAND_WARM;
+	} else if (argc == 4 && strcmp(argv[1], "warm") == 0 && strcmp(argv[2], "--auto") == 0 &&
+	           (strcmp(argv[3], "on") == 0 || strcmp(argv[3], "off") == 0)) {
+		auto_warm = argv[3];
+	} else if (argc < 3 || strcmp(argv[1], "overview") != 0 ||
+	           !parse(argc - 2, argv + 2, &cmd)) {
 		return usage();
 	}
 
@@ -133,6 +168,9 @@ int main(int argc, char **argv) {
 		return fail(c, "cannot find the root window");
 	}
 	xcb_window_t root = it.data->root;
+	if (auto_warm != NULL) {
+		return set_auto_warm(c, root, auto_warm);
+	}
 	char selection_name[32];
 	snprintf(selection_name, sizeof(selection_name), WS_SELECTION_PREFIX "%d", screen_num);
 	xcb_atom_t selection = atom(c, selection_name),
@@ -192,7 +230,9 @@ int main(int argc, char **argv) {
 		if (type == XCB_DESTROY_NOTIFY &&
 		    ((xcb_destroy_notify_event_t *)e)->window == owner) {
 			free(e);
-			return fail(c, "picom stopped before the overview closed");
+			return fail(c, cmd.command == WS_COMMAND_WARM
+			                   ? "picom stopped before the images were back"
+					   : "picom stopped before the overview closed");
 		}
 		if (type != XCB_CLIENT_MESSAGE ||
 		    ((xcb_client_message_event_t *)e)->type != answer) {

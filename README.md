@@ -22,23 +22,23 @@ makes them.
 ## Requirements
 
 - **picom with plugin API 0.9 of the picom fork**: the animation variable hook, frame
-  callbacks that can start animations, a paused screen, custom triggers a plugin
-  declares, a wakeup when the plugin's own X connection has data, which window picom
-  drew at a point, and whether it has an image of a window. No picom release has it
-  yet. Its first part, the animation variable hook, is proposed to picom upstream; the
-  rest is only in the picom fork this plugin is developed with. Upstream picom numbers
-  its plugin API on its own (it is at 0.1); once it has these calls, the plugin will ask
-  for upstream's number. The fork's `main` branch is picom's `next` branch plus one
-  commit per feature, and is not published yet. This version is tested at the fork ref
-  that CI names in `PICOM_REF`. Any other picom prints `ws-direction: picom's plugin API
-  is not compatible` and runs without the variables, so every animation whose script
-  reads one fails to load.
+  callbacks that can start animations, a frozen and a paused screen, custom triggers a
+  plugin declares, a wakeup when the plugin's own X connection has data, which window
+  picom drew at a point, and whether it keeps the image of a hidden window. No
+  picom release has it yet. Its first part, the
+  animation variable hook, is proposed to picom upstream; the rest is only in the picom
+  fork this plugin is developed with. Upstream picom numbers its plugin API on its own
+  (it is at 0.1); once it has these calls, the plugin will ask for upstream's number.
+  The fork's `main` branch is picom's `next` branch plus one commit per feature, and is
+  not published yet. This version is tested at the fork ref that CI names in `PICOM_REF`.
+  Any other picom prints `ws-direction: picom's plugin API is not compatible` and runs
+  without the variables, so every animation whose script reads one fails to load.
 - **X11**. The monitors come from RandR.
 - **An EWMH window manager.** It is tested with i3 only. See
   [Window manager integration](#window-manager-integration) for what the plugin needs
   from it.
 - To build: make, pkg-config, a C23 compiler (GCC 14 or clang 18 and later), and the
-  headers of xcb and xcb-randr.
+  headers of xcb, xcb-damage, xcb-randr and xcb-xfixes.
 
 ## Install
 
@@ -147,7 +147,34 @@ can start). Both are on the fork's `main` branch.
   workspace until the workspace is shown once. Neither has it of a window that opens on a
   hidden workspace. Only windows move, and the wallpaper stays where it is, so in a
   switch such a workspace passes as plain wallpaper, as does a workspace without
-  windows.
+  windows, and in the overview it shows no windows. The plugin doesn't show such
+  workspaces by itself, only those whose windows lost an image it saw; `ws-direction
+  warm` does, when you ask (see [i3](#i3)).
+- **Images come back by themselves.** picom loses the images of hidden windows when it
+  reinitializes (after a change to its config file, for example), and when the window
+  manager restarts, because then every window gets a new frame. The plugin notices: a
+  hidden window that it saw picom keep an image of has none any more. It then freezes the
+  screen, the keyboard and the pointer, has the window manager show each hidden workspace
+  once that has such a window (one per monitor at a time, with the EWMH request pagers
+  use), waits until their windows drew all of themselves and picom has their images, goes
+  back, puts the pointer back where it was, and lets go. Once a window shows, the plugin
+  asks it to draw all of itself again (an Expose event to each of its windows) and
+  follows what it draws from then on (DAMAGE), so what the X server put in the window
+  when it showed it doesn't count. It waits at most 0.5 s per workspace, and 3 s in all.
+  Nothing moves on screen meanwhile. What you type and click meanwhile waits, and goes to
+  the window that has the focus, and the window under the pointer, afterwards. The
+  windows of those workspaces do get the focus for a moment, which some programs notice:
+  a chat program may mark a message as read. And the window manager's last workspace
+  changes: after it, i3's `workspace back_and_forth` goes to the last workspace the
+  plugin showed, not to the one you were on before. No EWMH request or i3 command sets it
+  back. The plugin doesn't do this while a monitor is unfolded into an overview.
+  `ws-direction warm --auto off` stops it from doing this by itself, and `ws-direction
+  warm` does it when you ask.
+- **Empty workspaces stay put.** The plugin leaves a monitor alone while it shows a
+  workspace without windows: some window managers, i3 among them, remove such a
+  workspace once it is hidden, and the plugin could not go back to it. It gets that
+  monitor's images back as soon as the monitor shows a workspace with windows. That
+  switch then shows without its animation.
 - **Fullscreen and unredirect.** When picom unredirects the screen, it drops every kept
   image, and the hidden workspaces are empty again until each is shown. With
   `unredir-if-possible = true` that happens for every fullscreen window, not only games:
@@ -227,8 +254,8 @@ the backdrop there (window_at).
 
 A backdrop is a hidden window, stacked below every other window. The plugin maps it only
 for a moment, with the least `_NET_WM_WINDOW_OPACITY` there is, so picom gets an image of
-it, and hides it again; it does that again when its monitor or the wallpaper changes.
-picom draws a hidden window only in an animation, and only
+it, and hides it again; it does that again when its monitor or the wallpaper changes, and when picom lost
+the images of hidden windows. picom draws a hidden window only in an animation, and only
 if its rule keeps its image. So a style that doesn't want backdrops just has no rule for
 them, and never sees them. Each kept backdrop takes as much memory as a window the size
 of its monitor; without `WS_DIRECTION_BACKDROP` there are none. To draw them, add a
@@ -359,6 +386,7 @@ All three start on the backdrops of the monitor's workspaces too (see
 
     ws-direction overview open [--all | --output NAME] [--wait [--buttons]]
     ws-direction overview close | toggle
+    ws-direction warm [--auto on | off]
     ws-direction --version
 
 `overview open` unfolds the monitor with the focus (the one that shows
@@ -387,6 +415,18 @@ also returns when another button is pressed while a monitor is unfolded: 10 plus
 button's number, so 12 for the middle button, 13 for the right one, 14 and 15 for the
 wheel up and down, and 16 and 17 for left and right. The overview stays open; the window
 manager config decides what each one does (see [i3](#i3)).
+
+`warm` gets the images of hidden windows back now (see
+[Hidden workspaces](#hidden-workspaces)): the plugin shows each hidden workspace that has
+a window picom has no image of, on every monitor that shows a workspace with windows,
+with the screen, the keyboard and the pointer frozen, and goes back. It returns once
+that is done, so `ws-direction warm; ws-direction overview open` opens an overview
+whose workspaces all have their windows. It fails while a monitor shows the overview,
+and when another program holds the keyboard or the pointer. `warm --auto off` stops the
+plugin from doing it by itself when picom loses the images, and `warm --auto on` (the
+default) lets it again. That is kept in a property of the root window,
+`_WS_DIRECTION_WARM`, so it needs no picom, holds across picom restarts, and lasts until
+the X server ends.
 
 The command sends each command to the plugin as an event of its own, so commands that
 come fast, like two toggles, are each done, in order. It returns 0 once the plugin did
@@ -418,8 +458,10 @@ While picom runs with the plugin, the plugin owns the selection
 `_WS_DIRECTION_S<screen number>` with a window of its own, whose property
 `_WS_DIRECTION_VERSION` holds the protocol version. The command sends that window one
 client message per command, and the plugin answers it with client messages. The command
-finds out this way whether picom runs with the plugin. The details are in
-`src/protocol.h`, and they may change between versions: the command is the interface.
+finds out this way whether picom runs with the plugin. `warm --auto` sets the root window
+property `_WS_DIRECTION_WARM` instead, a string, `on` or `off`, which the plugin reads.
+The details are in `src/protocol.h`, and they may change between versions: the command
+is the interface.
 
 ## Window manager integration
 
@@ -472,15 +514,30 @@ Or one that shows only while you hold the key:
     bindsym $mod+Tab $overview open
     bindsym --release $mod+Tab $overview close
 
+When picom gets images back is up to you. After a change to picom's config or an i3
+restart it does so by itself; not when picom starts, and not before the overview opens.
+picom with `-b` returns once the plugin listens, so this gets every hidden workspace's
+images when picom starts, and the key gets them, if any are missing, before the overview
+opens:
+
+    exec_always --no-startup-id picom -b && ws-direction warm
+    bindsym $mod+Tab mode "overview"; exec --no-startup-id "ws-direction warm; ws-direction overview open --wait && i3-msg -q mode default"
+
+and this keeps the plugin from doing it by itself, so it happens only when you ask:
+
+    exec_always --no-startup-id ws-direction warm --auto off
+
 i3 must find `ws-direction` on its PATH: the package puts it in `/usr/bin`,
 `make install` in `~/.local/bin`, which is often not on the PATH of a window manager that
 a display manager starts; then give the full path.
 
 Under i3, the current workspace (`_NET_CURRENT_DESKTOP`) is the focused one, and each
 monitor has workspaces of its own, which i3 tells through `_NET_DESKTOP_VIEWPORT`. i3
-removes an empty workspace once it is hidden, so it doesn't count in `distance`. When
-one i3 command switches workspaces on two monitors, `_NET_CURRENT_DESKTOP` ends on one
-of them; the plugin sees the switch of the other from the windows i3 maps there.
+removes an empty workspace once it is hidden, so it doesn't count in `distance`, and the
+plugin doesn't get images back on a monitor while it shows one (see
+[Hidden workspaces](#hidden-workspaces)). When one i3 command switches workspaces on
+two monitors, `_NET_CURRENT_DESKTOP` ends on one of them; the plugin sees the switch of
+the other from the windows i3 maps there.
 
 ### Other EWMH window managers
 
@@ -496,9 +553,10 @@ The plugin uses only what an EWMH window manager already does. It reads:
 - the maps and unmaps of top-level windows, as events (`SubstructureNotify` on the root
   window).
 
-It sends the client message a pager sends to show and focus a window picked in the
-overview: `_NET_ACTIVE_WINDOW`. For a window of a hidden workspace, the window manager
-should show that workspace, as i3 does.
+It sends the client messages a pager sends: `_NET_CURRENT_DESKTOP` to show a workspace,
+when it gets images back, and `_NET_ACTIVE_WINDOW` to show and focus a window picked in
+the overview. For a window of a hidden workspace, the window manager should show that
+workspace, as i3 does.
 
 i3 sets the viewport of each workspace to the corner of its output, so the viewports
 say which monitor each workspace is on. The plugin takes them that way only where that
@@ -531,6 +589,21 @@ workspace the plugin didn't think was shown is a switch to it, and the plugin st
   and that picom runs with the plugin: run the command in a terminal, and it says so
   when it doesn't. With `WS_DIRECTION_LOG`, the plugin logs a line for every command and
   for every monitor it unfolds or folds.
+- **Hidden workspaces are empty in a pass style, cube, flip or the overview.** picom has
+  no image of their windows yet: after picom starts, a workspace has none until it is
+  shown once, and neither has a window that opens on a hidden workspace. Show each
+  workspace once, or run `ws-direction warm`. After a change to picom's config or a
+  window manager restart, the plugin gets the images back by itself (unless
+  `ws-direction warm --auto off`); a fullscreen window with
+  `unredir-if-possible` drops them all. See [Hidden workspaces](#hidden-workspaces).
+- **The screen, the keyboard and the pointer freeze for a moment after a config change
+  or a window manager restart.** That is the plugin getting the images back. A switch right after
+  picom lost them, on a monitor that showed an empty workspace, shows without its
+  animation.
+- **A window stays blank on its hidden workspace after the images came back.** The plugin
+  waits until the window drew all of itself after it showed, at most 0.5 s. A
+  program that takes longer, or draws only part of its window, is kept as it was then
+  until its workspace shows again.
 - **Windows blink when you go back to a workspace while its windows still move away.**
   This happens with picom releases. When a window maps again, picom draws its new pixmap
   from the first damage on. On some drivers (seen on NVIDIA) the X server sends that
@@ -558,10 +631,11 @@ workspace the plugin didn't think was shown is a switch to it, and the plugin st
 ## How it works
 
 The plugin reads the properties listed under
-[Other EWMH window managers](#other-ewmh-window-managers). The order in which a window
-manager changes these properties and maps or unmaps windows is not specified, and the
-changes can reach picom over several frames, so the variables don't depend on that
-order, nor on how long the window manager takes.
+[Other EWMH window managers](#other-ewmh-window-managers), and follows what a window
+draws when it gets images back. The order in which a window manager
+changes these properties and maps or unmaps windows is not specified, and the changes
+can reach picom over several frames, so the variables don't depend on that order, nor on
+how long the window manager takes.
 
 The plugin's own connection gets the root window's property changes and every map and
 unmap of a top-level window as events, in the order the X server made them. picom calls

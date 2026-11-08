@@ -50,6 +50,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <xcb/damage.h>
+#include <xcb/xfixes.h>
 
 #include "protocol.h"
 #include "version.h"
@@ -177,7 +179,11 @@ void ws_take_events(void) {
 			            e->atom == wsd.a_desktop_names ||
 			            e->atom == wsd.a_desktop_viewport ||
 			            e->atom == wsd.a_client_list;
-			wsd.read.needed |= root;
+			if (root) {
+				wsd.root_change_us = wsd.frame_time_us;
+			}
+			wsd.read.needed |=
+			    root || (e->window == wsd.root && e->atom == wsd.a_warm);
 			if (e->window == wsd.root &&
 			    (e->atom == wsd.a_rootpmap || e->atom == wsd.a_setroot)) {
 				wsd.wallpaper_changed = true;
@@ -254,6 +260,15 @@ static void ws_frame(uint64_t frame, [[maybe_unused]] void *user_data) {
 	wsd.frame_time_us = ws_now_us();
 	ws_take_events();
 
+	if (wsd.warm.step != WS_WARM_IDLE) {
+		if (wsd.read.needed) {
+			wsd.read.needed = false;
+			ws_read();
+		}
+		ws_warm_advance();
+		return;
+	}
+
 	if (wsd.read.needed && wsd.read.step == WS_READ_IDLE) {
 		wsd.read.needed = false;
 		ws_read_start();
@@ -274,6 +289,7 @@ static void ws_frame(uint64_t frame, [[maybe_unused]] void *user_data) {
 			wsd.read.paused = false;
 			wsd.api->pause_screen("plugin-ws-direction", 0, 0);
 		}
+		ws_prune_keepers();
 		ws_place_inputs();
 		ws_backdrops_update();
 	}
@@ -298,6 +314,10 @@ static void ws_frame(uint64_t frame, [[maybe_unused]] void *user_data) {
 		}
 	}
 	ws_backdrops_advance();
+	// Getting images back switches workspaces, which would show in the overview.
+	if (!ws_any_unfolded()) {
+		ws_warm_check();
+	}
 }
 
 __attribute__((constructor)) static void ws_init(void) {
@@ -333,6 +353,18 @@ __attribute__((constructor)) static void ws_init(void) {
 		return;
 	}
 	wsd.root = it.data->root;
+	// Warm follows what windows draw.
+	auto damage = xcb_get_extension_data(wsd.c, &xcb_damage_id);
+	auto xfixes = xcb_get_extension_data(wsd.c, &xcb_xfixes_id);
+	if (damage == NULL || !damage->present || xfixes == NULL || !xfixes->present) {
+		ws_fail("the X server has no DAMAGE or XFIXES extension, "
+		        "not adding the plugin-ws-direction-* variables");
+		xcb_disconnect(wsd.c);
+		wsd.c = NULL;
+		return;
+	}
+	free(xcb_xfixes_query_version_reply(wsd.c, xcb_xfixes_query_version(wsd.c, 2, 0), NULL));
+	free(xcb_damage_query_version_reply(wsd.c, xcb_damage_query_version(wsd.c, 1, 1), NULL));
 	wsd.a_current_desktop = ws_atom("_NET_CURRENT_DESKTOP");
 	wsd.a_desktop_names = ws_atom("_NET_DESKTOP_NAMES");
 	wsd.a_desktop_viewport = ws_atom("_NET_DESKTOP_VIEWPORT");
@@ -343,6 +375,7 @@ __attribute__((constructor)) static void ws_init(void) {
 	wsd.a_wm_state = ws_atom("_NET_WM_STATE");
 	wsd.a_wm_state_hidden = ws_atom("_NET_WM_STATE_HIDDEN");
 	wsd.a_active_window = ws_atom("_NET_ACTIVE_WINDOW");
+	wsd.a_warm = ws_atom(WS_WARM_PROPERTY);
 
 	// Selected before the first read, so no change after it is missed.
 	xcb_change_window_attributes(wsd.c, wsd.root, XCB_CW_EVENT_MASK,
