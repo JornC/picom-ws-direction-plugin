@@ -1,0 +1,343 @@
+.\" SPDX-License-Identifier: MPL-2.0
+.TH WS-DIRECTION 1 2026-11-01 "ws-direction 0.2.0" "User Commands"
+.SH NAME
+ws\-direction \- open and close the workspace overview of the ws-direction picom plugin
+.SH SYNOPSIS
+.B ws\-direction overview open
+.RB [ \-\-all " | " \-\-output
+.IR NAME ]
+.RB [ \-\-wait " [" \-\-buttons ]]
+.br
+.B ws\-direction overview close
+.br
+.B ws\-direction overview toggle
+.br
+.B ws\-direction \-\-version
+.SH DESCRIPTION
+.B ws\-direction
+is the command a window manager config calls to control the ws-direction plugin, which
+runs inside
+.BR picom (1).
+The command sends the plugin one event per command, and the plugin answers it.
+The plugin starts the animations; the styles in picom's config say what they look like.
+Commands that come fast, like two toggles, are each done, in order.
+.PP
+When picom does not run with the plugin, the command says so and fails.
+.SH COMMANDS
+.TP
+.B overview open
+Unfold the monitor with the focus (the one that shows
+.BR \%_NET_CURRENT_DESKTOP )
+into an overview of its workspaces, or the monitors that
+.B \-\-all
+or
+.B \-\-output
+name.
+The plugin starts the animation trigger
+.B ws\-unfold
+on every window of that monitor's workspaces, and again on every workspace switch on
+that monitor while the overview is open.
+The monitors it doesn't name don't take part.
+A monitor that is open already stays as it is.
+.IP
+While a monitor is unfolded, the plugin takes its clicks with a window of its own over
+the monitor, so they don't land on windows that are drawn somewhere else.
+The other monitors work as usual.
+A click of the left button on a window in the overview picks it: on the release, the
+plugin asks the window manager to show the window and focus it, as a pager does, and
+closes the overview once the window's workspace shows.
+A click where no window is drawn does nothing, and so do the other buttons and the
+wheel, unless a command waits for them
+.RB ( \-\-buttons ).
+.TP
+.B overview close
+Fold every unfolded monitor.
+The plugin starts the trigger
+.B ws\-fold
+on their windows.
+.TP
+.B overview toggle
+Close when the monitor with the focus is unfolded, else open.
+.SH OPTIONS
+.TP
+.B \-\-all
+Only after
+.BR "overview open" .
+Unfold every monitor.
+.TP
+.BI \-\-output " NAME"
+Only after
+.BR "overview open" .
+Unfold the monitor with RandR name
+.IR NAME ,
+as
+.B xrandr \-\-listmonitors
+shows it.
+It fails when no monitor of that name has workspaces of its own.
+.TP
+.B \-\-wait
+Only after
+.BR "overview open" .
+Don't return at once: wait until a click on a window closes the overview, and exit with
+status 0, or until an
+.B overview close
+or
+.B overview toggle
+command comes, whatever it does, and exit with status 1.
+A window manager config that opens the overview in a mode of its own can leave that mode
+after a click this way; its keys that close the overview leave the mode themselves.
+.TP
+.B \-\-buttons
+Only with
+.BR \-\-wait .
+Also return when another button is pressed while a monitor is unfolded, with exit status
+10 plus the button's number: 12 for the middle button, 13 for the right one, 14 and 15
+for the wheel up and down, 16 and 17 for left and right.
+The overview stays open; the window manager config says what each button does, and runs
+the command again to wait for the next one.
+.TP
+.B \-\-version
+Print
+.B ws\-direction
+and the version, and exit.
+.PP
+There is no
+.BR \-\-help :
+any other arguments print the usage to standard error, with exit status 2.
+.SH EXIT STATUS
+.TP
+.B 0
+The plugin did the command, or the version was printed.
+With
+.BR \-\-wait ,
+a click on a window closed the overview.
+.TP
+.B 1
+The command could not connect to the X server, picom does not run with the plugin, the
+plugin speaks another version of the protocol, or it could not do the command; a message
+says which.
+With
+.BR \-\-wait ,
+also when a close or toggle command came, or picom stopped.
+.TP
+.B 2
+The arguments were wrong.
+.TP
+.B 12 \(en 19
+With
+.BR "\-\-wait \-\-buttons" ,
+button 2 to 9 was pressed while a monitor was unfolded.
+.SH ENVIRONMENT
+.TP
+.B DISPLAY
+The X display to talk to.
+It must be the display picom runs on.
+.TP
+.B WS_DIRECTION_LOG
+Set it in picom's environment, not the command's, to a file, and the plugin logs every
+decision there, in picom's log format.
+The first line is
+.B ws\-direction
+and the version; if the plugin could not start, the line after it says why.
+.SH FILES
+.TP
+.I ~/.config/picom/plugins/ws\-direction.so
+The plugin, where
+.B make install
+puts it; picom finds it there by its name.
+A package puts it in picom's plugin directory, which is
+.I \%picom/plugins
+under the library directory picom was installed to, for example
+.IR \%/usr/lib/picom/plugins/ .
+The picom fork finds it there by its name; picom releases need its full path in
+.BR plugins .
+.TP
+.I ~/.config/picom/include/ws\-direction/
+The styles, where
+.B make install
+puts them.
+A package puts them in
+.IR \%/etc/xdg/picom/include/ws\-direction/ .
+picom looks in the directory of
+.I picom.conf
+first, so a copy of a style in
+.I ws\-direction/
+there wins over both.
+.SH THE PLUGIN
+The plugin needs plugin API 0.9 of the picom fork.
+Load it in
+.I picom.conf
+and include a style for workspace switches:
+.PP
+.RS 4
+.nf
+plugins = "ws\-direction.so";
+rules = ({
+  match = "!override_redirect && window_type = \(aqnormal\(aq";
+  @include "ws\-direction/slide.conf"
+});
+.fi
+.RE
+.PP
+The overview needs a style with animations for
+.B ws\-unfold
+and
+.BR ws\-fold ,
+in a second rule with the same match.
+It draws hidden workspaces from the images picom keeps of them; add
+.B keep\-image\-when\-hidden = true;
+to that rule.
+A workspace picom has not shown since it started has no images, and shows no windows.
+The plugin declares its triggers
+.BR ws\-pass ,
+.B ws\-unfold
+and
+.BR ws\-fold ,
+so the config doesn't list them in
+.BR animation\-triggers .
+.PP
+The command and the plugin talk through the selection
+.BR \%_WS_DIRECTION_S \fIscreen\fR,
+which the plugin owns, and client messages, which may change between versions.
+Use the command.
+.SH ANIMATION VARIABLES
+picom asks the plugin for these when an animation whose script reads one starts.
+The README has the details.
+.TP
+.B plugin\-ws\-direction\-direction
+1 if the new workspace sorts after the old one, \-1 if before, 0 if the animation is not
+part of a workspace switch on the window's monitor: the window manager didn't show or
+hide the window to make the switch, or the plugin didn't start the trigger for it.
+.TP
+.B plugin\-ws\-direction\-distance
+How many of the monitor's workspaces the switch moved; 0 when the direction is 0.
+.TP
+.B plugin\-ws\-direction\-monitor\-x
+The left edge of the monitor that shows the window's workspace, also while it is hidden;
+for a window that closes, of the whole screen.
+.TP
+.B plugin\-ws\-direction\-monitor\-y
+The top edge of that monitor.
+.TP
+.B plugin\-ws\-direction\-monitor\-width
+The width of that monitor.
+.TP
+.B plugin\-ws\-direction\-monitor\-height
+The height of that monitor.
+.TP
+.B plugin\-ws\-direction\-faces
+How many workspaces that monitor has.
+.TP
+.B plugin\-ws\-direction\-face
+How many of the monitor's workspaces the window's workspace is away from the one shown
+before the switch (outside a switch, the one shown now): positive after it, negative
+before.
+.TP
+.B plugin\-ws\-direction\-selected
+1 if that monitor shows the current workspace, else 0.
+.TP
+.B plugin\-ws\-direction\-placed
+0 if the window is on one workspace but its centre is not on that workspace's monitor,
+else 1.
+.TP
+.B plugin\-ws\-direction\-index
+Where the window's workspace is among the monitor's workspaces, counted from 0 in their
+order.
+.TP
+.B plugin\-ws\-direction\-shown
+The index of the workspace the monitor shows now; \-1 while the plugin can't tell.
+.TP
+.B plugin\-ws\-direction\-unfolded
+1 while the monitor is unfolded into an overview, else 0.
+.SH TRIGGERS
+The plugin starts these custom animation triggers on the windows of a monitor's
+workspaces.
+picom ignores a start on a window whose rule has no animation for the trigger, or that
+it has no image of.
+.TP
+.B ws\-pass
+On every workspace switch, on every window of the monitor of the switch, in the pass in
+which the plugin sees it; not on a window that moved to the new workspace with the
+switch.
+.TP
+.B ws\-unfold
+When the overview opens on a monitor, on every window of its workspaces and on the
+windows on all desktops there (with the index of the shown workspace); again, instead of
+.BR ws\-pass ,
+on every switch on that monitor while it is open; and again when its workspaces or
+windows change while it is open.
+.TP
+.B ws\-fold
+When the overview closes, on every window of the monitors that were open.
+After a click on a window, the window's monitor folds together with the switch to the
+window's workspace, or at once if that workspace shows already.
+.SH EXAMPLES
+An
+.BR i3 (1)
+overview that $mod+Tab opens, the arrow keys move through, and Return, Escape, $mod+Tab
+or a click on a window close:
+.PP
+.RS 4
+.nf
+set $overview exec \-\-no\-startup\-id ws\-direction overview
+bindsym $mod+Tab mode "overview"; $overview open \-\-wait && i3\-msg \-q mode default
+mode "overview" {
+    bindsym Left workspace prev_on_output
+    bindsym Up workspace prev_on_output
+    bindsym Right workspace next_on_output
+    bindsym Down workspace next_on_output
+    bindsym Return mode "default"; $overview close
+    bindsym Escape mode "default"; $overview close
+    bindsym $mod+Tab mode "default"; $overview close
+}
+.fi
+.RE
+.PP
+.B open \-\-wait
+returns 0 once a click on a window closed the overview, and then
+.B i3\-msg
+takes i3 out of the overview mode.
+.PP
+To give the other buttons something to do, run the command again after each one, for
+example from a script that the binding runs:
+.PP
+.RS 4
+.nf
+while :; do
+    ws\-direction overview open \-\-wait \-\-buttons
+    case $? in
+    14) i3\-msg \-q workspace prev_on_output ;;
+    15) i3\-msg \-q workspace next_on_output ;;
+    0) i3\-msg \-q mode default; exit ;;
+    *) exit ;;
+    esac
+done
+.fi
+.RE
+.PP
+An overview that shows only while the key is held:
+.PP
+.RS 4
+.nf
+bindsym $mod+Tab $overview open
+bindsym \-\-release $mod+Tab $overview close
+.fi
+.RE
+.PP
+The window manager must find
+.B ws\-direction
+on its PATH.
+.B make install
+puts it in
+.IR ~/.local/bin ,
+which is often not on the PATH of a window manager that a display manager starts; then
+give the full path.
+.SH SEE ALSO
+.BR picom (1),
+.BR i3 (1)
+.PP
+The README of this release has the details of the variables and the triggers, the
+styles, how to write one, and the limits:
+.RS 4
+\%https://github.com/JornC/picom\-ws\-direction\-plugin/blob/v0.2.0/README.md
+.RE

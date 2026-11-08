@@ -1,4 +1,4 @@
-# The plugin needs plugin API 0.7 of the picom fork, which only the fork has so far. Both
+# The plugin needs plugin API 0.9 of the picom fork, which only the fork has so far. Both
 # jobs fetch the fork at PICOM_REF from github.com/JornC/picom: its branch stack/main,
 # until it is tagged.
 #

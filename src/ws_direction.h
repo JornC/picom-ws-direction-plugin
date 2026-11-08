@@ -4,8 +4,9 @@
 /// The plugin's internal header: the types, the state and the functions that more than
 /// one of its modules uses, or the unit tests in tests/unit. desktop.c reads the
 /// monitors, the workspaces and the managed windows from the X server. passes.c finds
-/// switches, starts ws-pass and works out the variables. plugin.c hooks them up to picom
-/// and calls them in every pass.
+/// switches, starts ws-pass and works out the variables. overview.c unfolds and folds the
+/// overview, and does the commands. plugin.c hooks them up to picom and calls them in
+/// every pass.
 
 #pragma once
 
@@ -19,7 +20,7 @@
 #include <xcb/xcb.h>
 
 /// The plugin API the plugin needs is 0.WS_API_MINOR, as the picom fork numbers it.
-#define WS_API_MINOR 7
+#define WS_API_MINOR 9
 #define WS_STR(x) #x
 #define WS_XSTR(x) WS_STR(x)
 #define WS_API_VERSION "0." WS_XSTR(WS_API_MINOR)
@@ -34,6 +35,10 @@ static_assert(false, "picom/api.h is not compatible: ws-direction needs plugin "
 
 /// The custom trigger we start on the windows of the workspaces a switch passes.
 #define WS_PASS_TRIGGER "ws-pass"
+/// The custom triggers we start on the windows of a monitor when its workspaces unfold
+/// into an overview, and when they fold back.
+#define WS_UNFOLD_TRIGGER "ws-unfold"
+#define WS_FOLD_TRIGGER "ws-fold"
 
 /// The animation variables, plugin-ws-direction-<name>, with names in ws_variable_names.
 enum ws_variable {
@@ -47,6 +52,9 @@ enum ws_variable {
 	WS_VAR_FACE,
 	WS_VAR_SELECTED,
 	WS_VAR_PLACED,
+	WS_VAR_INDEX,
+	WS_VAR_SHOWN,
+	WS_VAR_UNFOLDED,
 	WS_N_VARIABLES,
 };
 
@@ -107,6 +115,22 @@ struct ws_monitor {
 	/// Its switches, oldest first.
 	struct ws_switch switches[WS_HISTORY];
 	unsigned n_switches;
+	/// Whether its workspaces are unfolded into an overview.
+	bool unfolded;
+	/// The workspace of the window a click in the overview picked, while we wait for
+	/// the window manager to show it, else NULL.
+	char *pick;
+	/// While it is unfolded, the window over it that takes its clicks, and where it
+	/// is.
+	xcb_window_t input;
+	struct ws_rect input_rect;
+	/// While it is unfolded, its workspaces and windows when we last started
+	/// ws-unfold on them, see ws_overview_refresh.
+	char *unfolded_as;
+	/// Its windows that picom had no image of when we started ws-unfold, see
+	/// ws_overview_retry.
+	xcb_window_t *waiting;
+	unsigned n_waiting;
 };
 
 /// A window the window manager manages, as the last read saw it.
@@ -120,6 +144,8 @@ struct ws_client {
 	struct ws_rect rect;
 	/// The name of its workspace, NULL if it is not on one.
 	char *workspace;
+	/// Whether it is on all desktops, and not hidden.
+	bool sticky;
 	/// Whether it is viewable: it and its frame are mapped.
 	bool viewable;
 	/// The switch that its next show or hide is part of, and the switch that its last
@@ -136,6 +162,17 @@ struct ws_start {
 	const char *trigger;
 	xcb_atom_t monitor;
 	uint64_t first, last;
+};
+
+/// A command, as the client message's data (protocol.h).
+struct ws_command_message {
+	uint32_t data[5];
+};
+
+/// A command that waits for the overview to close: its window, and its WS_WAIT_* flags.
+struct ws_waiter {
+	xcb_window_t window;
+	uint32_t flags;
 };
 
 /// A map or unmap of a top-level window, or a change of _NET_CURRENT_DESKTOP, that our
@@ -171,15 +208,17 @@ struct ws_state {
 	xcb_connection_t *c;
 	xcb_window_t root;
 	xcb_atom_t a_current_desktop, a_desktop_names, a_desktop_viewport, a_wm_desktop,
-	    a_utf8_string, a_net_wm_name, a_client_list, a_wm_state, a_wm_state_hidden;
+	    a_utf8_string, a_net_wm_name, a_client_list, a_wm_state, a_wm_state_hidden,
+	    a_command, a_answer, a_active_window;
 	struct ws_rect screen;
 	FILE *log;
 
 	/// The pass picom is in (UINT64_MAX before the first one), and when it started.
 	uint64_t frame;
 	uint64_t frame_time_us;
-	/// The pass in which we last read the root window and the managed windows.
-	uint64_t read_frame;
+	/// The pass in which we last read the root window and the managed windows, and
+	/// the one whose read the overview last looked at.
+	uint64_t read_frame, refreshed_read;
 	/// A read of the root window and the managed windows that waits for its replies,
 	/// see ws_read_start.
 	struct {
@@ -227,6 +266,9 @@ struct ws_state {
 	/// left out.
 	struct ws_client *clients;
 	unsigned n_clients;
+	/// The top-level windows, bottom to top, as the last read saw them.
+	xcb_window_t *stack;
+	unsigned n_stack;
 
 	struct ws_monitor tracked[WS_MAX_MONITORS];
 	unsigned n_tracked;
@@ -241,6 +283,23 @@ struct ws_state {
 	struct ws_start *starts;
 	unsigned n_starts;
 	uint64_t starts_frame;
+
+	/// The window that owns our selection, which the command sends its commands to.
+	xcb_window_t owner;
+	/// The commands that came and that we didn't do yet, and the commands that wait
+	/// for the overview to close.
+	struct ws_command_message *commands;
+	unsigned n_commands;
+	struct ws_waiter *waiters;
+	unsigned n_waiters;
+	/// The last click of the first button while a monitor was unfolded: where it was
+	/// pressed, whether it was pressed and released since we last acted on one, and
+	/// when it was released.
+	struct {
+		bool pressed, pending;
+		int16_t x, y;
+		xcb_timestamp_t time;
+	} click;
 	/// An event that ws_pending took from xcb's queue, not handled yet.
 	xcb_generic_event_t *queued;
 };
@@ -295,4 +354,20 @@ bool ws_start(xcb_window_t w, const char *trigger, const struct ws_monitor *m,
               uint64_t first, uint64_t last);
 void ws_compute(const struct picom_animation_start *start,
                 double values[static WS_N_VARIABLES]);
-void ws_start_passes(void);
+bool ws_start_passes(void);
+
+// overview.c
+bool ws_any_unfolded(void);
+void ws_answer(xcb_window_t w, uint32_t code, uint32_t detail);
+void ws_pick_done(void);
+void ws_pick(void);
+const char *
+ws_overview_switch_trigger(struct ws_monitor *m, const struct ws_switch *s, bool *folded);
+void ws_run_commands(void);
+void ws_place_inputs(void);
+bool ws_overview_member(const struct ws_client *c, int index, bool overview);
+void ws_overview_started(struct ws_monitor *m);
+void ws_overview_refresh(void);
+void ws_overview_retry(void);
+void ws_button(uint8_t button);
+bool ws_overview_init(int screen);

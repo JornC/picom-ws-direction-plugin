@@ -4,22 +4,23 @@
 
 The first version. The commits before it had no version.
 
-It needs plugin API 0.7 of the picom fork (CI builds against the fork at `PICOM_REF`).
+It needs plugin API 0.9 of the picom fork (CI builds against the fork at `PICOM_REF`).
 
 Upgrading from the unversioned plugin on `main`:
 
 - picom's `hook-v2` branch, with plugin API 0.2, can't load it. The picom fork can.
 - The variables it had, `direction`, `monitor-x`, `monitor-y`, `monitor-width` and
   `monitor-height`, keep their names and meaning. `distance`, `faces`, `face`,
-  `selected` and `placed` are new.
+  `selected`, `placed`, `index`, `shown` and `unfolded` are new.
+- `make install` now also installs the command, `ws-direction`, and its man page.
 - The `WS_DIRECTION_LOG` line for an animation says `direction = N` where it said
   `workspace-direction = N`; change what greps for it.
 
 Variables:
 
-- Ten animation variables: `direction`, `distance`, `monitor-x`, `monitor-y`,
-  `monitor-width`, `monitor-height`, `faces`, `face`, `selected` and `placed`, all under
-  `plugin-ws-direction-`.
+- Thirteen animation variables: `direction`, `distance`, `monitor-x`, `monitor-y`,
+  `monitor-width`, `monitor-height`, `faces`, `face`, `selected`, `placed`, `index`,
+  `shown` and `unfolded`, all under `plugin-ws-direction-`.
 - They don't depend on the order in which the window manager changes its properties and
   maps or unmaps windows, nor on how long it takes: the plugin follows the maps and
   unmaps on its own connection, and a show or hide is part of a switch when the window
@@ -36,6 +37,26 @@ Switch passes:
   between.
 - A window that moves to the new workspace with the switch gets no `ws-pass`.
 - The plugin declares `ws-pass`, so a config doesn't list it in `animation-triggers`.
+
+Overview:
+
+- `ws-direction overview open` unfolds the monitor with the focus into an overview of its
+  workspaces (`ws-unfold`), `close` folds every open monitor (`ws-fold`), and `toggle`
+  does one or the other. `--all` opens every monitor, `--output NAME` one by its name.
+- A switch while the overview is open starts `ws-unfold` again, and so does a change of
+  its workspaces or windows. Windows on all desktops take part.
+- An InputOnly window over each unfolded monitor takes its clicks. A left click on a
+  window picks it: the window manager shows and focuses it, and the overview closes.
+- The plugin declares `ws-unfold` and `ws-fold`.
+
+Command:
+
+- The command sends each command to the plugin as an event, through a selection and
+  client messages, and fails with a message when picom doesn't run with the plugin.
+- `ws-direction overview open --wait` returns 0 once a click picked a window, and 1 when
+  a close or toggle command comes; with `--buttons` also when another button is pressed.
+- `ws-direction --version`.
+- A man page, `ws-direction(1)`.
 
 Build and tests:
 

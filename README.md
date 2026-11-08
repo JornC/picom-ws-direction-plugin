@@ -5,9 +5,9 @@ workspace switch went, and which monitor a window's workspace is on. With it a `
 `hide` animation can move windows the right way and keep them on their monitor. It also
 tells them where a window's workspace is among the monitor's workspaces, for effects
 that draw the workspaces a switch passes. picom itself knows nothing about workspaces:
-the plugin reads the window manager's EWMH properties and hands the scripts ten numbers.
-What the scripts do with them is up to you; `styles/` has seven switch styles to start
-from.
+the plugin reads the window manager's EWMH properties and hands the scripts thirteen
+numbers. What the scripts do with them is up to you; `styles/` has seven switch styles
+to start from, and the `ws-direction` command opens and closes the overview.
 
 ![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
 horizontal on the portrait one](docs/slide.gif)
@@ -21,15 +21,18 @@ makes them.
 
 ## Requirements
 
-- **picom with plugin API 0.7 of the picom fork**: the animation variable hook, frame
-  callbacks that can start animations, custom triggers a plugin declares, a paused
-  screen, and a wakeup when the plugin's X connection has data. No picom release has it
+- **picom with plugin API 0.9 of the picom fork**: the animation variable hook, frame
+  callbacks that can start animations, a paused screen, custom triggers a plugin
+  declares, a wakeup when the plugin's own X connection has data, which window picom
+  drew at a point, and whether it has an image of a window. No picom release has it
   yet. Its first part, the animation variable hook, is proposed to picom upstream; the
   rest is only in the picom fork this plugin is developed with. Upstream picom numbers
   its plugin API on its own (it is at 0.1); once it has these calls, the plugin will ask
-  for upstream's number. Any other picom prints `ws-direction: picom's plugin API is not
-  compatible` and runs without the variables, so every animation whose script reads one
-  fails to load.
+  for upstream's number. The fork's `main` branch is picom's `next` branch plus one
+  commit per feature, and is not published yet. This version is tested at the fork ref
+  that CI names in `PICOM_REF`. Any other picom prints `ws-direction: picom's plugin API
+  is not compatible` and runs without the variables, so every animation whose script
+  reads one fails to load.
 - **X11**. The monitors come from RandR.
 - **An EWMH window manager.** It is tested with i3 only. See
   [Window manager integration](#window-manager-integration) for what the plugin needs
@@ -42,22 +45,27 @@ makes them.
     make
     make install
 
-`make` builds the plugin `build/ws-direction.so`. It finds picom's headers
-(`<picom/api.h>`) with `pkg-config --cflags picom-api`. To build against a picom source
-tree instead, run `make PICOM_API_CFLAGS=-I/path/to/picom/include`.
+`make` builds the plugin `build/ws-direction.so` and the command `build/ws-direction`. It
+finds picom's headers (`<picom/api.h>`) with `pkg-config --cflags picom-api`. To build
+against a picom source tree instead, run
+`make PICOM_API_CFLAGS=-I/path/to/picom/include`.
 
-`make install` puts the plugin in `~/.config/picom/plugins/` and the styles in
-`~/.config/picom/include/ws-direction/`. picom finds them there by name. `~/.config` is
-`$XDG_CONFIG_HOME` when that is set. `PICOM_CONFIG_DIR`, `PLUGINDIR`, `STYLEDIR` and
-`DESTDIR` change where things go. `make install` overwrites what is in the style
-directory, so keep your own copies of styles elsewhere (see [Styles](#styles)).
-`make uninstall`, with the same variables, removes what `make install` put in place, and
-the style directory if that leaves it empty.
+`make install` puts the plugin in `~/.config/picom/plugins/`, the styles in
+`~/.config/picom/include/ws-direction/`, the command in `~/.local/bin/`, and its man page
+in `~/.local/share/man/man1/`. picom finds the plugin and the styles there by name.
+`~/.config` is `$XDG_CONFIG_HOME` when that is set. `PREFIX` (default `~/.local`) sets
+where the command and the man page go, in `bin/` and `share/man/` under it;
+`PICOM_CONFIG_DIR`, `PLUGINDIR`, `STYLEDIR`, `BINDIR`, `MANDIR` and `DESTDIR` change where
+things go too. `make install` overwrites what is in the style directory, so keep your
+own copies of styles elsewhere (see [Styles](#styles)). `make uninstall`, with the same
+variables, removes what `make install` put in place, and the style directory if that
+leaves it empty.
 
 A package installs the plugin in picom's plugin directory, which is `picom/plugins/` under
 the library directory picom was installed to, for example `/usr/lib/picom/plugins/`. The
 picom fork finds it there by name; picom releases need its full path in `plugins`. The
-styles go to `/etc/xdg/picom/include/ws-direction/`:
+command goes to `/usr/bin/`, the man page to `/usr/share/man/man1/` and the styles to
+`/etc/xdg/picom/include/ws-direction/`:
 
     make install DESTDIR=... PREFIX=/usr PLUGINDIR=/usr/lib/picom/plugins \
         STYLEDIR=/etc/xdg/picom/include/ws-direction
@@ -78,8 +86,10 @@ In `picom.conf`, load the plugin and include a style in a rule:
 
 To check that it works:
 
-- `picom --diagnostics` lists `ws-pass` under "Custom animation triggers" when picom
-  loaded the plugin: the plugin declares it.
+- `ws-direction --version` prints `ws-direction` and the version. That also shows the
+  command is on your PATH.
+- `picom --diagnostics` lists `ws-pass`, `ws-unfold` and `ws-fold` under "Custom
+  animation triggers" when picom loaded the plugin: the plugin declares them.
 - Start picom with `WS_DIRECTION_LOG=/path/to/file` in its environment. The plugin writes
   `ws-direction <version>` there when picom loads it, and then a line for every switch it
   sees and for every animation that reads its variables, with the values and why. If the
@@ -156,16 +166,17 @@ starts.
 
 ### Drawing hidden windows
 
-`ws-pass` runs on the windows of hidden workspaces too. For those, three rules hold:
+`ws-pass`, `ws-unfold` and `ws-fold` run on the windows of hidden workspaces too. For
+those, three rules hold:
 
 - Keep their images: set `keep-image-when-hidden = true` in the rule. picom ignores a
   start on a window it has no image of.
 - Set `opacity` from `window-mapped-opacity * plugin-ws-direction-placed`. A hidden
   window has `window-raw-opacity` 0; `window-mapped-opacity` is the opacity it has while
   shown, and `placed` is 0 for a window whose place is on another monitor.
-- Place the windows by `plugin-ws-direction-face`, with the `plugin-ws-direction-monitor-*`
-  rect, not with `window-monitor-*`: a hidden window can be on the wrong monitor (see
-  `placed`).
+- Place the windows by `plugin-ws-direction-face` or `plugin-ws-direction-index`, with
+  the `plugin-ws-direction-monitor-*` rect, not with `window-monitor-*`: a hidden window
+  can be on the wrong monitor (see `placed`).
 
 ### Workspaces a switch passes
 
@@ -212,10 +223,10 @@ no `ws-pass` animation. Such a window gets its `show` or `hide` as usual.
   fullscreen, a window moved to another workspace). A `show` or `open` is part of a
   switch when the window manager showed the window to make that switch, a `hide` when it
   hid it to make it (see [How it works](#how-it-works)); a new window is never part of
-  one. `ws-pass` carries the switch the plugin started it for, if any. A custom trigger
-  the plugin didn't start, such as one started with picom's `StartAnimations` (see
-  picom(1)), is never part of a switch, and neither are `size`, `position`, `color`,
-  `increase-opacity` and `decrease-opacity`.
+  one. `ws-pass`, `ws-unfold` and `ws-fold` carry the switch the plugin started them for,
+  if any. A custom trigger the plugin didn't start, such as one started with picom's
+  `StartAnimations` (see picom(1)), is never part of a switch, and neither are `size`,
+  `position`, `color`, `increase-opacity` and `decrease-opacity`.
 
 `plugin-ws-direction-distance`
 : How many workspaces of the monitor the switch moved: 1 to the next one, 2 when it
@@ -254,6 +265,20 @@ no `ws-pass` animation. Such a window gets its `show` or `hide` as usual.
   another monitor is still on the first monitor then. A style that draws hidden
   workspaces should not draw it: multiply its opacity by `placed`.
 
+`plugin-ws-direction-index`
+: Where the window's workspace is among the workspaces of its monitor, counted from 0 in
+  their order. Unlike `face`, it doesn't depend on a switch. 0 for a window that is not
+  on one workspace, but for a window on all desktops in `ws-unfold` and `ws-fold`: there
+  it is `shown`, and the variables are those of the shown workspace.
+
+`plugin-ws-direction-shown`
+: The `index` of the workspace that the monitor of the window's workspace shows now. -1
+  while the plugin can't tell which one that is, which it logs: when the workspace it
+  showed is gone and the window manager shows none of the others yet.
+
+`plugin-ws-direction-unfolded`
+: 1 while that monitor is unfolded into an overview, else 0.
+
 The workspaces of a monitor are in the order of `_NET_DESKTOP_NAMES`. Under i3 that is
 their order on the output: by number, with unnumbered names after them. A window is on
 one workspace if the window
@@ -263,15 +288,70 @@ that isn't the selected one, which isn't seen on its workspace).
 
 ### Triggers
 
-The plugin declares a custom animation trigger, so a config uses it without listing it in
-`animation-triggers` (listing it too is fine). It starts it on the windows of a
-monitor's workspaces; picom ignores a start on a window whose rule has no animation for
-the trigger, or that it has no image of.
+The plugin declares three custom animation triggers, so a config uses them without
+listing them in `animation-triggers` (listing them too is fine). It starts them on the
+windows of a monitor's workspaces; picom ignores a start on a window whose rule has no
+animation for the trigger, or that it has no image of.
 
 `ws-pass`
 : On every workspace switch, on every window of the monitor of the switch, in the pass in
   which the plugin sees the switch; not on a window that moved to the new workspace with
   the switch. See [Workspaces a switch passes](#workspaces-a-switch-passes).
+
+`ws-unfold`
+: When the overview opens on a monitor, on every window of that monitor's workspaces and
+  every window on all desktops on it; again, instead of `ws-pass`, on every switch on
+  that monitor while it is open; and again when its workspaces or windows change while
+  it is open.
+
+`ws-fold`
+: When the overview closes, on every window of the monitors that were open, and the
+  windows on all desktops on them. After a
+  click on a window, the other open monitors fold at once, and the window's monitor
+  folds together with the switch to the window's workspace (instead of `ws-pass`), or
+  at once if that workspace shows already.
+
+### The ws-direction command
+
+    ws-direction overview open [--all | --output NAME] [--wait [--buttons]]
+    ws-direction overview close | toggle
+    ws-direction --version
+
+`overview open` unfolds the monitor with the focus (the one that shows
+`_NET_CURRENT_DESKTOP`) into an overview of its workspaces; the other monitors don't take
+part. With `--all` every monitor unfolds, and with `--output NAME` the monitor with that
+RandR name (as `xrandr --listmonitors` shows it). A monitor that is open already stays as
+it is. `overview close` folds every monitor that is open. `overview toggle` closes when
+the monitor with the focus is open, and opens it otherwise. `make` builds the command as
+`build/ws-direction`, and `make install` installs it with the plugin.
+
+While a monitor is unfolded, the plugin takes its clicks, with a window of its own over
+the monitor, so they don't land on windows that are drawn somewhere else. The other
+monitors work as usual, and so does what is stacked above the windows the overview
+draws, like a menu or a notification. If the plugin can't make that window, `open` fails
+and says so. A click of the left button on a window in the
+overview picks it: on the release, the plugin asks the window manager to show the window
+and focus it, as a pager does, and closes the overview once the window's workspace shows.
+A click where no window is drawn, between the tiles or inside one, does nothing, so pick
+a workspace by one of its windows. A click on a monitor that isn't unfolded, the other
+buttons and the wheel do nothing either, unless the window manager config says what they
+do through `--buttons`.
+
+With `--wait`, `open` returns 0 once a click on a window closed the overview. It returns
+1 when a `close` or `toggle` command comes, whatever that did. With `--buttons` too, it
+also returns when another button is pressed while a monitor is unfolded: 10 plus the
+button's number, so 12 for the middle button, 13 for the right one, 14 and 15 for the
+wheel up and down, and 16 and 17 for left and right. The overview stays open; the window
+manager config decides what each one does (see [i3](#i3)).
+
+The command sends each command to the plugin as an event of its own, so commands that
+come fast, like two toggles, are each done, in order. It returns 0 once the plugin did
+the command, and 1 with a message when it can't: when it can't connect to the X server,
+when picom doesn't run with the plugin (`picom is not running with the ws-direction
+plugin`), when the plugin speaks another version of the protocol, or when the plugin
+could not do it (no monitor with that name, the overview is open). Wrong arguments print
+the usage and return 2. `--version` prints `ws-direction` and the version. The man page, `man ws-direction`,
+has the details.
 
 ### Environment
 
@@ -280,11 +360,72 @@ the trigger, or that it has no image of.
   picom's log format. The first line is `ws-direction <version>`.
 
 `DISPLAY`
-: The plugin connects to the display it names, like picom itself. Without that
-  connection the plugin adds no variables.
+: The plugin connects to the display it names, like picom itself, and so does the
+  command. Without that connection the plugin adds no variables.
+
+### How the command talks to the plugin
+
+While picom runs with the plugin, the plugin owns the selection
+`_WS_DIRECTION_S<screen number>` with a window of its own, whose property
+`_WS_DIRECTION_VERSION` holds the protocol version. The command sends that window one
+client message per command, and the plugin answers it with client messages. The command
+finds out this way whether picom runs with the plugin. The details are in
+`src/protocol.h`, and they may change between versions: the command is the interface.
+
 ## Window manager integration
 
 ### i3
+
+An overview that `$mod+Tab` opens, the arrow keys move through, and Return, Escape,
+`$mod+Tab` or a click on a window close:
+
+    set $overview exec --no-startup-id ws-direction overview
+    bindsym $mod+Tab mode "overview"; $overview open --wait && i3-msg -q mode default
+    mode "overview" {
+        bindsym Left workspace prev_on_output
+        bindsym Up workspace prev_on_output
+        bindsym Right workspace next_on_output
+        bindsym Down workspace next_on_output
+        bindsym Return mode "default"; $overview close
+        bindsym Escape mode "default"; $overview close
+        bindsym $mod+Tab mode "default"; $overview close
+    }
+
+`open --wait` returns 0 once a click on a window closed the overview, and then `i3-msg`
+takes i3 out of the overview mode. It returns 1 when a `close` or `toggle` command comes,
+whatever that did; the mode's keys leave the mode themselves.
+
+To give the other buttons something to do, open the overview from a small script that
+runs `open --wait --buttons` again after each button. With this one the wheel moves
+through the workspaces and the right button closes the overview:
+
+    #!/bin/sh
+    # ~/.config/i3/overview.sh
+    while :; do
+        ws-direction overview open --wait --buttons
+        case $? in
+        14) i3-msg -q workspace prev_on_output ;;
+        15) i3-msg -q workspace next_on_output ;;
+        13) ws-direction overview close; i3-msg -q mode default; exit ;;
+        0) i3-msg -q mode default; exit ;;
+        *) exit ;;
+        esac
+    done
+
+    bindsym $mod+Tab mode "overview"; exec --no-startup-id ~/.config/i3/overview.sh
+
+with the same mode as above. `--all` opens every monitor at once:
+
+    bindsym $mod+Shift+Tab mode "overview"; $overview open --all --wait && i3-msg -q mode default
+
+Or one that shows only while you hold the key:
+
+    bindsym $mod+Tab $overview open
+    bindsym --release $mod+Tab $overview close
+
+i3 must find `ws-direction` on its PATH: the package puts it in `/usr/bin`,
+`make install` in `~/.local/bin`, which is often not on the PATH of a window manager that
+a display manager starts; then give the full path.
 
 Under i3, the current workspace (`_NET_CURRENT_DESKTOP`) is the focused one, and each
 monitor has workspaces of its own, which i3 tells through `_NET_DESKTOP_VIEWPORT`. i3
@@ -305,6 +446,10 @@ The plugin uses only what an EWMH window manager already does. It reads:
   frame with `QueryTree`;
 - the maps and unmaps of top-level windows, as events (`SubstructureNotify` on the root
   window).
+
+It sends the client message a pager sends to show and focus a window picked in the
+overview: `_NET_ACTIVE_WINDOW`. For a window of a hidden workspace, the window manager
+should show that workspace, as i3 does.
 
 i3 sets the viewport of each workspace to the corner of its output, so the viewports
 say which monitor each workspace is on. The plugin takes them that way only where that
@@ -328,10 +473,15 @@ workspace the plugin didn't think was shown is a switch to it, and the plugin st
   plugin (picom up to v13 finds it by name only from `--plugins`; give the full path),
   or the plugin could not start: then a line that starts with `ws-direction:` on picom's
   standard error says why, and so does `WS_DIRECTION_LOG` (the plugin doesn't write to
-  picom's `--log-file`). `picom's plugin API is not compatible` means it needs another
-  plugin API of the picom fork; others say it could not connect to the X server. A
-  style with a `ws-pass` part also logs an error about that part. `picom --diagnostics`
-  lists the plugin's trigger once it loads.
+  picom's `--log-file`). `picom's plugin API is not compatible` means it needs plugin
+  API 0.9 of the picom fork; others say it could not connect to the X server. A style with a `ws-pass` part also logs an
+  error about that part. `picom --diagnostics` lists the plugin's triggers once it
+  loads.
+- **The overview key does nothing.** Check that the window manager finds `ws-direction`
+  (see [i3](#i3)), that an overview style is in a second rule next to the switch style,
+  and that picom runs with the plugin: run the command in a terminal, and it says so
+  when it doesn't. With `WS_DIRECTION_LOG`, the plugin logs a line for every command and
+  for every monitor it unfolds or folds.
 - **Windows blink when you go back to a workspace while its windows still move away.**
   This happens with picom releases. When a window maps again, picom draws its new pixmap
   from the first damage on. On some drivers (seen on NVIDIA) the X server sends that

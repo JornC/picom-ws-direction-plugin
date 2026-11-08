@@ -20,13 +20,15 @@
 /// in between, and of its other workspaces. We start them in the pass in which we see the
 /// switch, so they all begin together, also when the window manager hides and shows them
 /// over more than one pass. A window that is viewable before and after the switch moved
-/// along with it, and stays on screen, so it is left out. We declare ws-pass ourselves
-/// (add_animation_trigger), so a config uses it without listing it in animation-triggers.
-/// A config that wants the windows in between drawn keeps their images
-/// (keep-image-when-hidden) and gives them a ws-pass animation that suppresses show and
-/// hide, so a show or hide that comes later does not restart them. picom ignores the
-/// start for a window without a ws-pass animation, and for one it cannot draw because it
-/// has no image yet; such a window gets its show or hide as usual.
+/// along with it, and stays on screen, so it is left out. We declare ws-pass, ws-unfold
+/// and ws-fold ourselves (add_animation_trigger), so a config uses them without listing
+/// them in animation-triggers. A config that wants the windows in between drawn keeps
+/// their images (keep-image-when-hidden) and gives them a ws-pass animation that
+/// suppresses show and hide, so a show or hide that comes later does not restart them.
+/// picom ignores the start for a window without a ws-pass animation, and for one it
+/// cannot draw because it has no image yet; such a window gets its show or hide as
+/// usual. While the monitor is unfolded into an overview, we start the trigger
+/// overview.c gives instead.
 ///
 /// For the triggers we start, we remember why (ws_start), and the variables
 /// say that. A custom trigger we didn't start, such as one started over D-Bus, is part of
@@ -95,6 +97,9 @@ static void ws_free_switch(struct ws_switch *s) {
 /// Free what monitor `m` holds.
 void ws_free_monitor(struct ws_monitor *m) {
 	free(m->shown);
+	free(m->pick);
+	free(m->unfolded_as);
+	free(m->waiting);
 	ws_free_list(m->list, m->n_list);
 	for (unsigned k = 0; k < m->n_switches; k++) {
 		ws_free_switch(&m->switches[k]);
@@ -422,6 +427,9 @@ void ws_reconcile(struct ws_client *prev, unsigned n_prev, struct ws_event *even
 		if (index == -2 || !used) {
 			ws_log("Monitor %u is gone, forgetting its switches",
 			       (unsigned)m->name);
+			if (m->input != XCB_NONE) {
+				xcb_destroy_window(wsd.c, m->input);
+			}
 			ws_free_monitor(m);
 			wsd.tracked[i] = wsd.tracked[--wsd.n_tracked];
 		} else {
@@ -560,7 +568,9 @@ static bool ws_is_own_change(const char *trigger) {
 }
 
 static bool ws_is_ours(const char *trigger) {
-	return strcmp(trigger, WS_PASS_TRIGGER) == 0;
+	return strcmp(trigger, WS_PASS_TRIGGER) == 0 ||
+	       strcmp(trigger, WS_UNFOLD_TRIGGER) == 0 ||
+	       strcmp(trigger, WS_FOLD_TRIGGER) == 0;
 }
 
 /// Read where a window is, with its border, in a round trip of its own. Returns false if
@@ -668,6 +678,17 @@ void ws_compute(const struct picom_animation_start *start,
 	auto own = !gone && ws_is_ours(start->trigger)
 	               ? ws_find_start(start->frame, start->window, client, start->trigger)
 	               : NULL;
+	bool sticky = false;
+	if (c != NULL && c->sticky && own != NULL) {
+		// The overview draws a window on all desktops on the shown tile of the
+		// monitor we started it for.
+		auto ms = ws_find_monitor(ws_monitor_of_name(own->monitor));
+		if (ms != NULL && ws_find_desktop(ms->shown) >= 0) {
+			sticky = true;
+			desktop = ws_find_desktop(ms->shown);
+			monitor = ws_monitor_of_name(own->monitor);
+		}
+	}
 	auto monitor_rect = ws_monitor_rect(monitor);
 	auto m = ws_find_monitor(monitor);
 	const char *workspace = desktop >= 0 ? wsd.names[desktop] : NULL;
@@ -694,6 +715,7 @@ void ws_compute(const struct picom_animation_start *start,
 			last = ws_find_switch(ms, own->last);
 		}
 		reason = own == NULL    ? "not started by the plugin"
+		         : sticky       ? "on all desktops, drawn on the shown workspace"
 		         : last == NULL ? "started by the plugin, not for a switch"
 		                        : "started by the plugin for a switch";
 	} else {
@@ -727,9 +749,14 @@ void ws_compute(const struct picom_animation_start *start,
 		placed = ws_rect_has_point(monitor_rect, rect.x1 + (rect.x2 - rect.x1) / 2,
 		                           rect.y1 + (rect.y2 - rect.y1) / 2);
 	}
-	auto faces = known ? n : 0;
+	auto faces = gone || !known ? 0 : n;
 	bool selected = wsd.current >= 0 && wsd.current < wsd.n_names &&
 	                ws_desktop_monitor((unsigned)wsd.current) == monitor;
+	auto index = desktop >= 0 ? ws_list_find(list, n, workspace) : 0;
+	if (desktop < 0) {
+		shown = 0;
+	}
+	bool unfolded = desktop >= 0 && m != NULL && m->unfolded;
 
 	values[WS_VAR_DIRECTION] = move.direction;
 	values[WS_VAR_DISTANCE] = move.distance;
@@ -741,6 +768,9 @@ void ws_compute(const struct picom_animation_start *start,
 	values[WS_VAR_FACE] = face;
 	values[WS_VAR_SELECTED] = selected;
 	values[WS_VAR_PLACED] = placed;
+	values[WS_VAR_INDEX] = index;
+	values[WS_VAR_SHOWN] = shown;
+	values[WS_VAR_UNFOLDED] = unfolded;
 
 	if (wsd.log != NULL) {
 		// Measured before the name lookup, which only the log needs.
@@ -749,12 +779,13 @@ void ws_compute(const struct picom_animation_start *start,
 		char *name = gone ? strdup("") : ws_window_name(client);
 		ws_log("%s of window %#010x (%s): direction = %d (%s), "
 		       "distance %u, face %d of %u, selected %d, placed %d, "
-		       "monitor %d,%d %dx%d, %llu us, %u waits for X, pass %llu",
+		       "monitor %d,%d %dx%d, index %d, shown %d, unfolded %d, "
+		       "%llu us, %u waits for X, pass %llu",
 		       start->trigger, start->window, name, move.direction, reason,
 		       move.distance, face, faces, selected, placed, monitor_rect.x1,
 		       monitor_rect.y1, monitor_rect.x2 - monitor_rect.x1,
-		       monitor_rect.y2 - monitor_rect.y1, (unsigned long long)took, waits,
-		       (unsigned long long)start->frame);
+		       monitor_rect.y2 - monitor_rect.y1, index, shown, unfolded,
+		       (unsigned long long)took, waits, (unsigned long long)start->frame);
 		free(name);
 	}
 }
@@ -767,8 +798,11 @@ void ws_compute(const struct picom_animation_start *start,
 /// switch doesn't reach: when a switch comes while the last one still runs, every window
 /// of the monitor is then in the same animation, and a style can carry their positions
 /// over. A window that was viewable before the switch and is viewable after it moved
-/// along with it, so it is left out.
-void ws_start_passes(void) {
+/// along with it, so it is left out. While the monitor is unfolded, it starts the trigger
+/// ws_overview_switch_trigger gives instead of ws-pass. Returns whether that folded a
+/// monitor for a click, see ws_pick.
+bool ws_start_passes(void) {
+	bool folded = false;
 	for (unsigned i = 0; i < wsd.n_tracked; i++) {
 		auto m = &wsd.tracked[i];
 		unsigned k = m->n_switches;
@@ -788,14 +822,19 @@ void ws_start_passes(void) {
 			       first->from, last->to);
 			continue;
 		}
+		auto trigger = ws_overview_switch_trigger(m, last, &folded);
+		if (trigger == NULL) {
+			trigger = WS_PASS_TRIGGER;
+		}
 		auto index = ws_monitor_of_name(m->name);
+		bool overview = strcmp(trigger, WS_PASS_TRIGGER) != 0;
 		unsigned members = 0, started = 0;
 		for (unsigned j = 0; j < wsd.n_clients; j++) {
 			auto c = &wsd.clients[j];
-			bool in = c->workspace != NULL &&
-			          (ws_desktop_monitor((unsigned)c->desktop) == index ||
-			           strcmp(c->workspace, first->from) == 0 ||
-			           strcmp(c->workspace, last->to) == 0);
+			bool in = ws_overview_member(c, index, overview) ||
+			          (c->workspace != NULL &&
+			           (strcmp(c->workspace, first->from) == 0 ||
+			            strcmp(c->workspace, last->to) == 0));
 			bool along = c->viewable && c->along >= first->id &&
 			             c->workspace != NULL &&
 			             strcmp(c->workspace, last->to) == 0;
@@ -803,13 +842,17 @@ void ws_start_passes(void) {
 				continue;
 			}
 			members++;
-			started += ws_start(c->id, WS_PASS_TRIGGER, m, first->id, last->id);
+			started += ws_start(c->id, trigger, m, first->id, last->id);
 		}
 		if (members > 0) {
 			ws_log("Switch \"%s\" -> \"%s\" has %u windows, "
 			       "started %s on %u (in pass %llu)",
-			       first->from, last->to, members, WS_PASS_TRIGGER, started,
+			       first->from, last->to, members, trigger, started,
 			       (unsigned long long)wsd.frame);
 		}
+		if (strcmp(trigger, WS_UNFOLD_TRIGGER) == 0) {
+			ws_overview_started(m);
+		}
 	}
+	return folded;
 }

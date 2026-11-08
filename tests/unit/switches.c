@@ -190,7 +190,7 @@ TEST(switch_on_a_monitor_without_the_focus) {
 	CHECK_INT(fx_tracked(0)->n_switches, 0);
 	CHECK_INT(fx_client(0x106)->last_show, m->switches[0].id);
 	CHECK_INT(fx_client(0x105)->last_hide, m->switches[0].id);
-	ws_start_passes();
+	CHECK(!ws_start_passes());
 	CHECK_INT(test_n_starts, 2);
 	// Then the focus moves there: no switch.
 	test_n_starts = 0;
@@ -198,7 +198,7 @@ TEST(switch_on_a_monitor_without_the_focus) {
 	fx_current(5);
 	fx_read();
 	CHECK_INT(m->n_switches, 1);
-	ws_start_passes();
+	CHECK(!ws_start_passes());
 	CHECK_INT(test_n_starts, 0);
 }
 
@@ -278,7 +278,7 @@ TEST(switch_fast_back_where_it_came_from) {
 	fx_switch_events(0);
 	fx_read();
 	CHECK_INT(fx_tracked(0)->n_switches, 2);
-	ws_start_passes();
+	CHECK(!ws_start_passes());
 	CHECK_INT(test_n_starts, 0);
 	CHECK_HAS(test_log, "went back where they came from");
 }
@@ -357,7 +357,8 @@ TEST(switch_shown_workspace_gone_is_logged) {
 	fx_client(0x106)->desktop = 4;
 	fx_read();
 	CHECK_HAS(test_log, "\"5\", which it showed, is gone");
-	fx_compute(0x106, "size");
+	auto v = fx_compute(0x106, "size");
+	CHECK_INT(v.shown, -1);
 	CHECK_HAS(test_log, "we don't know which of its workspaces it shows");
 }
 
@@ -421,8 +422,7 @@ TEST(passes_start_on_the_monitor_of_the_switch) {
 	fx_read();
 	fx_pass();
 	fx_switch(2);
-	ws_start_passes();
-	ws_start_passes();
+	CHECK(!ws_start_passes());
 	// The windows of 1 to 4. Not those of 5 and 6, on the other monitor, and not the
 	// window on all desktops.
 	CHECK_INT(test_n_starts, 4);
@@ -454,6 +454,45 @@ TEST(passes_not_for_a_window_that_moved_along) {
 	}
 }
 
+TEST(passes_unfold_while_unfolded) {
+	two_monitors();
+	auto m = fx_tracked(0);
+	m->unfolded = true;
+	fx_pass();
+	fx_switch(1);
+	CHECK(!ws_start_passes());
+	CHECK_INT(test_n_starts, 4);
+	CHECK_STR(test_starts[0].trigger, "ws-unfold");
+	CHECK(m->unfolded);
+}
+
+TEST(passes_fold_for_the_picked_workspace) {
+	two_monitors();
+	auto m = fx_tracked(0);
+	m->unfolded = true;
+	m->pick = strdup("3");
+	fx_pass();
+	fx_switch(2);
+	CHECK(ws_start_passes());
+	CHECK_INT(test_n_starts, 4);
+	CHECK_STR(test_starts[0].trigger, "ws-fold");
+	CHECK(!m->unfolded);
+	CHECK(m->pick == NULL);
+}
+
+TEST(passes_other_switch_keeps_the_overview) {
+	two_monitors();
+	auto m = fx_tracked(0);
+	m->unfolded = true;
+	m->pick = strdup("4");
+	fx_pass();
+	fx_switch(1);
+	CHECK(!ws_start_passes());
+	CHECK_STR(test_starts[0].trigger, "ws-unfold");
+	CHECK(m->unfolded);
+	CHECK(m->pick == NULL);
+}
+
 TEST(passes_old_workspace_on_another_monitor) {
 	two_monitors();
 	fx_pass();
@@ -462,10 +501,9 @@ TEST(passes_old_workspace_on_another_monitor) {
 	// takes part, by the name of the workspace.
 	wsd.viewports[0] = 3440;
 	wsd.viewports[1] = 0;
-	ws_start_passes();
 	ws_update_viewport_monitors();
 	fx_read();
-	ws_start_passes();
+	CHECK(!ws_start_passes());
 	CHECK_INT(test_n_starts, 4);
 	CHECK_INT(test_starts[0].window, 0x101);
 }

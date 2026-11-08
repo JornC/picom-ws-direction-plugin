@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # Test harness for the ws-direction picom plugin, and so for the picom plugin API it builds
-# on (animation variables, frame callbacks, start_animation, add_animation_trigger,
-# pause_screen and add_wakeup_fd: plugin API 0.7).
+# on (animation variables, frame callbacks, start_animation, window_has_image,
+# add_animation_trigger, pause_screen, add_wakeup_fd and window_at: plugin API 0.9).
 #
-# Phase 1: a nested Xvfb with two monitors (DPT 3440x1440 at +0+480, HDT 1080x1920 at
-# +3440+0), stock i3, xterms on several workspaces, and picom with the plugin,
-# styles/slide.conf and debug logging. It runs i3 commands through i3-msg and checks
+# Setup: a nested Xvfb with two monitors (DPT 3440x1440 at +0+480, HDT 1080x1920 at
+# +3440+0). It checks that the command prints its version and exits 2 on wrong
+# arguments. Before any window manager runs, it checks with picom --diagnostics that
+# every style in styles/ loads without an animation-triggers line, and that a config
+# that still lists the plugin's triggers loads; and that make uninstall removes what
+# make install put in place, the man page too.
+#
+# Phase 1: stock i3, xterms on several workspaces, and picom with the plugin,
+# styles/slide.conf and debug logging. It checks that the plugin's first log line is its
+# version, the command's. It runs i3 commands through i3-msg and checks
 # the direction (and for some switches the distance and the other variables) that the
 # plugin logs for every window that shows, opens or hides. It also takes screenshots in
 # the middle of slowed-down slides, to check the slide style slides the right way and
@@ -13,8 +20,6 @@
 # tests/picom-anim.conf, whose scripts don't read the variables, and checks the plugin
 # is loaded but never asked (the hook calls a provider only for scripts that read its
 # variable), and with a config without "open" animations to check the startup seed.
-# It also checks that the plugin's first log line is its version, and that make
-# uninstall removes what make install put in place.
 #
 # Phase 1 also starts a custom animation trigger over picom's D-Bus interface
 # (StartAnimations) on an xterm of a hidden workspace, and checks a screenshot shows it
@@ -41,7 +46,7 @@
 # Usage: make && tests/run.sh, or make check-harness; make check-all runs the unit tests
 # first.
 # Environment: PICOM (picom binary, default: picom on the PATH; it must have plugin API
-# 0.7), I3 (default /usr/bin/i3),
+# 0.9), I3 (default /usr/bin/i3),
 # WSDIR_DISPLAY (default :91), WSDIR_WORK (directory for the i3 socket and logs, default
 # $XDG_RUNTIME_DIR/wsdir-<display number>), WSDIR_SETTLE (seconds to wait after each
 # step, default 0.7), WSDIR_PLUGIN (the plugin, default build/ws-direction.so).
@@ -434,6 +439,27 @@ xrandr --setmonitor HDT 1080/300x1920/530+3440+0 none >/dev/null
 read -ra XCB_FLAGS <<<"$(pkg-config --cflags --libs xcb)"
 cc -O2 -Wall -o "$OUT/fakewm" "$HERE/fakewm.c" "${XCB_FLAGS[@]}" || die "cannot build fakewm"
 
+# The command prints its version, and exits 2 on wrong arguments, without picom.
+CMD_VERSION=$("$ROOT/build/ws-direction" --version 2>&1)
+"$ROOT/build/ws-direction" bogus >/dev/null 2>&1
+bogus_status=$?
+version_re='^ws-direction [0-9]+\.[0-9]+\.[0-9]+'
+if [[ $CMD_VERSION =~ $version_re ]] && ((bogus_status == 2)); then
+	pass "ws-direction --version prints $CMD_VERSION, wrong arguments exit 2"
+else
+	fail "ws-direction --version prints the version, wrong arguments exit 2" \
+		"--version printed: $CMD_VERSION" "bogus exited $bogus_status"
+fi
+# Without picom, the command says so and fails.
+no_plugin=$("$ROOT/build/ws-direction" overview open 2>&1)
+no_plugin_status=$?
+if ((no_plugin_status == 1)) && [[ $no_plugin == *"picom is not running with the ws-direction plugin"* ]]; then
+	pass "without picom the command fails, and says why"
+else
+	fail "without picom the command fails, and says why" \
+		"exit status $no_plugin_status, message: $no_plugin"
+fi
+
 if "$PICOM" --config "$CONFIG" --diagnostics >"$OUT/diagnostics.out" 2>&1 &&
 	grep -q "Config file used: $CONFIG" "$OUT/diagnostics.out" &&
 	! grep -qiE "error.*(config|script|parse|line)" "$OUT/diagnostics.out"; then
@@ -442,26 +468,66 @@ else
 	fail "slide style loads (picom --diagnostics)" "see $OUT/diagnostics.out"
 fi
 if grep -q "plugin API is not compatible" "$OUT/diagnostics.out"; then
-	die "this picom does not have plugin API 0.7, see $OUT/diagnostics.out"
+	die "this picom does not have plugin API 0.9, see $OUT/diagnostics.out"
 fi
 "$PICOM" --config "$OUT/wave.conf" --diagnostics >"$OUT/diagnostics-wave.out" 2>&1
 grep -qx "  - wave" "$OUT/diagnostics-wave.out" ||
 	die "this picom has no custom animation triggers, see $OUT/diagnostics-wave.out"
-# make uninstall takes away what make install put there.
+# Every shipped style loads with the plugin and no animation-triggers line: the plugin
+# declares the triggers the styles use.
+bad_styles=
+for style in "$ROOT"/styles/*.conf; do
+	{
+		echo "plugins = \"$PLUGIN\";"
+		echo 'backend = "glx";'
+		echo 'rules = ({'
+		echo "  match = \"!override_redirect && window_type = 'normal'\";"
+		cat "$style"
+		echo '});'
+	} >"$OUT/style-check.conf"
+	"$PICOM" --config "$OUT/style-check.conf" --diagnostics >"$OUT/style-check.out" 2>&1
+	if ! grep -q "Config file used: $OUT/style-check.conf" "$OUT/style-check.out" ||
+		grep -qiE "error.*(config|script|parse|line|trigger)|fatal" "$OUT/style-check.out"; then
+		bad_styles+=" $(basename "$style")"
+		cp "$OUT/style-check.out" "$OUT/style-check-$(basename "$style" .conf).out"
+	fi
+done
+if [[ -z $bad_styles ]]; then
+	pass "every style loads without an animation-triggers line"
+else
+	fail "every style loads without an animation-triggers line" "failed:$bad_styles"
+fi
 # Only what this run installs, not files an earlier run left there.
 rm -rf "$OUT/installed"
 make -s -C "$ROOT" install PICOM_CONFIG_DIR="$OUT/installed/xdg/picom" \
 	BINDIR="$OUT/installed/bin" MANDIR="$OUT/installed/man" >"$OUT/install.out" 2>&1
-installed=$(find "$OUT/installed/xdg" "$OUT/installed/bin" -type f 2>/dev/null | wc -l)
+# make uninstall takes away what make install put there, the man page too.
+installed=$(find "$OUT/installed/xdg" "$OUT/installed/bin" "$OUT/installed/man" -type f \
+	2>/dev/null | wc -l)
+man_page=missing
+[[ -f $OUT/installed/man/man1/ws-direction.1 ]] && man_page=installed
 make -s -C "$ROOT" uninstall PICOM_CONFIG_DIR="$OUT/installed/xdg/picom" \
 	BINDIR="$OUT/installed/bin" MANDIR="$OUT/installed/man" >>"$OUT/install.out" 2>&1
 left=$(find "$OUT/installed/xdg" "$OUT/installed/bin" "$OUT/installed/man" -type f 2>/dev/null)
-if ((installed > 0)) && [[ -z $left ]]; then
-	pass "make uninstall removes the $installed files make install put in place"
+if ((installed > 0)) && [[ $man_page == installed && -z $left ]]; then
+	pass "make uninstall removes the $installed files make install put, man page too"
 else
 	mapfile -t left_files <<<"$left"
-	fail "make uninstall removes the files make install put in place" \
-		"installed $installed, left:" "${left_files[@]}"
+	fail "make uninstall removes the files make install put, man page too" \
+		"installed $installed, man page $man_page, left:" "${left_files[@]}"
+fi
+# An older config that still lists the plugin's triggers loads too, each trigger once.
+{
+	echo 'animation-triggers = ["ws-pass", "ws-unfold", "ws-fold"];'
+	cat "$OUT/pass.conf"
+} >"$OUT/listed.conf"
+"$PICOM" --config "$OUT/listed.conf" --diagnostics >"$OUT/diagnostics-listed.out" 2>&1
+listed=$(for t in ws-pass ws-unfold ws-fold; do grep -cx "  - $t" "$OUT/diagnostics-listed.out"; done | tr '\n' ' ')
+if [[ $listed == "1 1 1 " ]] && ! grep -qiE "error.*(config|script|parse|line|trigger)|fatal" "$OUT/diagnostics-listed.out"; then
+	pass "a config that still lists the plugin's triggers loads, each trigger once"
+else
+	fail "a config that still lists the plugin's triggers loads, each trigger once" \
+		"counts: $listed, see $OUT/diagnostics-listed.out"
 fi
 
 # --- phase 1: stock i3 ---
@@ -518,10 +584,11 @@ start_picom "$I3_CONFIG" picom-i3
 
 # The plugin's first line in WS_DIRECTION_LOG, which is picom's log here, is its version.
 plugin_first=$(grep -m1 " ws_direction DEBUG \] " "$LOG" | sed -E 's/^\[[^]]*\] //')
-if [[ $plugin_first == "ws-direction "* ]]; then
-	pass "the plugin's first log line is its version ($plugin_first)"
+if [[ $plugin_first == "$CMD_VERSION" ]]; then
+	pass "the plugin's first log line is its version, the command's ($plugin_first)"
 else
-	fail "the plugin's first log line is its version" "got: $plugin_first"
+	fail "the plugin's first log line is its version, the command's" \
+		"expected: $CMD_VERSION" "got:      $plugin_first"
 fi
 
 i3_case "HDT 5->3 while the focus is on DPT, first switch after picom started" \

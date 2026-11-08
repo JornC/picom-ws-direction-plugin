@@ -158,8 +158,8 @@ static xcb_get_property_cookie_t ws_window_desktop_request(xcb_window_t w) {
 	return ws_prop_request(w, wsd.a_wm_desktop, XCB_ATOM_CARDINAL, 1);
 }
 
-/// Take the reply to ws_window_desktop_request. Returns -1 if the property is not set,
-/// or not a single desktop we know.
+/// Take the reply to ws_window_desktop_request. Returns -2 for a window on all desktops,
+/// -1 if the property is not set, or not a single desktop we know.
 static int64_t ws_window_desktop_reply(xcb_get_property_cookie_t cookie) {
 	auto prop = ws_prop_reply(cookie);
 	int64_t ret = -1;
@@ -167,10 +167,10 @@ static int64_t ws_window_desktop_reply(xcb_get_property_cookie_t cookie) {
 		ret = *(uint32_t *)xcb_get_property_value(prop);
 	}
 	free(prop);
-	if (ret == WS_ALL_DESKTOPS || ret >= wsd.n_names) {
-		return -1;
+	if (ret == WS_ALL_DESKTOPS) {
+		return -2;
 	}
-	return ret;
+	return ret >= wsd.n_names ? -1 : ret;
 }
 
 /// The requests of the second round trip for one managed window.
@@ -443,6 +443,8 @@ static void ws_take_windows(uint32_t *samples) {
 	for (unsigned i = 0; i < n; i++) {
 		auto r = &wsd.read.windows[i];
 		auto desktop = ws_window_desktop_reply(r->desktop);
+		bool sticky = desktop == -2;
+		desktop = sticky ? -1 : desktop;
 		auto state = ws_prop_reply(r->state);
 		if (state != NULL && state->format == 32) {
 			const xcb_atom_t *atoms = xcb_get_property_value(state);
@@ -450,6 +452,7 @@ static void ws_take_windows(uint32_t *samples) {
 			for (int j = 0; j < n_atoms; j++) {
 				if (atoms[j] == wsd.a_wm_state_hidden) {
 					desktop = -1;
+					sticky = false;
 				}
 			}
 		}
@@ -473,6 +476,7 @@ static void ws_take_windows(uint32_t *samples) {
 			             .x2 = origin->dst_x + g->width,
 			             .y2 = origin->dst_y + g->height},
 			    .workspace = workspace,
+			    .sticky = sticky,
 			    .viewable = attr->map_state == XCB_MAP_STATE_VIEWABLE,
 			};
 		}
@@ -537,7 +541,9 @@ bool ws_read_advance(uint64_t wait_us) {
 	free(wsd.read.windows);
 	wsd.read.windows = NULL;
 	wsd.read.n_windows = 0;
-	free(wsd.read.toplevels);
+	free(wsd.stack);
+	wsd.stack = wsd.read.toplevels;
+	wsd.n_stack = wsd.read.n_toplevels;
 	wsd.read.toplevels = NULL;
 
 	// The events up to our last request are in xcb's queue now. Those the read saw

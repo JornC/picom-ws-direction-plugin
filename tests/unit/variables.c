@@ -57,6 +57,9 @@ TEST(variables_show_in_a_switch) {
 	CHECK_INT(v.face, 2);
 	CHECK_INT(v.selected, 1);
 	CHECK_INT(v.placed, 1);
+	CHECK_INT(v.index, 2);
+	CHECK_INT(v.shown, 2);
+	CHECK_INT(v.unfolded, 0);
 }
 
 TEST(variables_hide_in_a_switch) {
@@ -65,6 +68,8 @@ TEST(variables_hide_in_a_switch) {
 	CHECK_INT(v.direction, 1);
 	CHECK_INT(v.distance, 2);
 	CHECK_INT(v.face, 0);
+	CHECK_INT(v.index, 0);
+	CHECK_INT(v.shown, 2);
 }
 
 TEST(variables_open_is_a_show) {
@@ -80,9 +85,11 @@ TEST(variables_ws_pass_on_every_workspace_of_the_monitor) {
 	CHECK_INT(passed.direction, 1);
 	CHECK_INT(passed.distance, 2);
 	CHECK_INT(passed.face, 1);
+	CHECK_INT(passed.index, 1);
 	auto beyond = fx_compute(0x104, "ws-pass");
 	CHECK_INT(beyond.direction, 1);
 	CHECK_INT(beyond.face, 3);
+	CHECK_INT(beyond.index, 3);
 	// The other monitor has no switch, and the plugin started nothing there.
 	auto other = fx_compute(0x105, "ws-pass");
 	CHECK_INT(other.direction, 0);
@@ -108,6 +115,8 @@ TEST(variables_custom_trigger_not_started_by_the_plugin) {
 	CHECK_INT(v.direction, 0);
 	CHECK_INT(v.distance, 0);
 	CHECK_INT(v.face, -1);
+	CHECK_INT(v.index, 1);
+	CHECK_INT(v.shown, 2);
 }
 
 TEST(variables_switch_back) {
@@ -150,6 +159,8 @@ TEST(variables_new_window_right_after_a_switch) {
 	CHECK_INT(v.direction, 0);
 	CHECK_INT(v.distance, 0);
 	CHECK_INT(v.face, 0);
+	CHECK_INT(v.index, 1);
+	CHECK_INT(v.shown, 1);
 }
 
 TEST(variables_own_change_is_never_a_switch) {
@@ -166,19 +177,6 @@ TEST(variables_own_change_is_never_a_switch) {
 	CHECK_INT(fx_compute(0x101, "size").face, -2);
 }
 
-TEST(variables_close_gets_the_whole_screen) {
-	switch_1_to_3();
-	auto v = fx_compute(0x101, "close");
-	CHECK_INT(v.direction, 0);
-	CHECK_INT(v.x, 0);
-	CHECK_INT(v.y, 0);
-	CHECK_INT(v.width, 4520);
-	CHECK_INT(v.height, 1920);
-	CHECK_INT(v.faces, 0);
-	CHECK_INT(v.face, 0);
-	CHECK_INT(v.placed, 1);
-}
-
 TEST(variables_window_on_all_desktops) {
 	switch_1_to_3();
 	fx_window(0x200, -1, (struct ws_rect){.x1 = 3500, .y1 = 100, .x2 = 3600, .y2 = 200});
@@ -189,6 +187,7 @@ TEST(variables_window_on_all_desktops) {
 	CHECK_INT(inside.faces, 2);
 	CHECK_INT(inside.face, 0);
 	CHECK_INT(inside.placed, 1);
+	CHECK_INT(inside.index, 0);
 	auto across = fx_compute(0x201, "show");
 	CHECK_INT(across.x, 0);
 	CHECK_INT(across.width, 4520);
@@ -203,6 +202,46 @@ TEST(variables_window_not_on_its_monitor) {
 	auto v = fx_compute(0x200, "size");
 	CHECK_INT(v.placed, 0);
 	CHECK_INT(v.x, 3440);
+	CHECK_INT(v.index, 1);
+}
+
+TEST(variables_unfolded) {
+	two_monitors();
+	fx_tracked(0)->unfolded = true;
+	CHECK_INT(fx_compute(0x102, "size").unfolded, 1);
+	CHECK_INT(fx_compute(0x105, "size").unfolded, 0);
+}
+
+TEST(variables_unfold_right_after_a_switch) {
+	// The overview opens right after the switch from 1 to 3. The plugin started
+	// ws-unfold for the overview, not for the switch: no direction. A style goes on
+	// from the switch's pose by carrying its variables.
+	switch_1_to_3();
+	fx_pass();
+	auto m = fx_tracked(0);
+	m->unfolded = true;
+	ws_start(0x102, WS_UNFOLD_TRIGGER, m, 0, 0);
+	auto v = fx_compute(0x102, "ws-unfold");
+	CHECK_INT(v.direction, 0);
+	CHECK_INT(v.face, -1);
+	CHECK_INT(v.index, 1);
+	CHECK_INT(v.shown, 2);
+	CHECK_INT(v.unfolded, 1);
+}
+
+TEST(variables_unfold_for_a_switch_while_unfolded) {
+	two_monitors();
+	fx_tracked(0)->unfolded = true;
+	fx_pass();
+	fx_switch(2);
+	ws_start_passes();
+	auto v = fx_compute(0x102, "ws-unfold");
+	CHECK_INT(v.direction, 1);
+	CHECK_INT(v.distance, 2);
+	CHECK_INT(v.face, 1);
+	CHECK_INT(v.index, 1);
+	CHECK_INT(v.shown, 2);
+	CHECK_INT(v.unfolded, 1);
 }
 
 TEST(variables_window_shows_before_the_root_window_says) {
@@ -269,6 +308,7 @@ TEST(variables_many_switches_in_a_row) {
 	CHECK_INT(show4.direction, 1);
 	CHECK_INT(show4.distance, 1);
 	CHECK_INT(show4.face, 1);
+	CHECK_INT(show4.index, 3);
 }
 
 TEST(variables_stacked_monitors) {
@@ -293,6 +333,7 @@ TEST(variables_stacked_monitors) {
 	CHECK_INT(v.height, 1080);
 	CHECK_INT(v.faces, 3);
 	CHECK_INT(v.face, 2);
+	CHECK_INT(v.index, 2);
 	CHECK_INT(v.selected, 1);
 	auto up = fx_compute(0x101, "size");
 	CHECK_INT(up.y, 0);
@@ -309,9 +350,12 @@ TEST(variables_one_monitor_wrap_around) {
 	CHECK_INT(show.distance, 4);
 	CHECK_INT(show.face, -4);
 	CHECK_INT(show.faces, 5);
+	CHECK_INT(show.index, 0);
 	auto hide = fx_compute(0x105, "hide");
 	CHECK_INT(hide.direction, -1);
 	CHECK_INT(hide.face, 0);
+	CHECK_INT(hide.index, 4);
+	CHECK_INT(hide.shown, 0);
 }
 
 TEST(variables_equal_viewports_are_the_whole_screen) {

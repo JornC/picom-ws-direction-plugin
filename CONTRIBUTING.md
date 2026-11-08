@@ -5,7 +5,7 @@ commits. For using it, see the [README](README.md).
 
 ## Building against the picom fork
 
-The plugin needs plugin API 0.7 of the picom fork. No picom release has it yet; it is on
+The plugin needs plugin API 0.9 of the picom fork. No picom release has it yet; it is on
 the `main` branch of the picom fork the plugin is developed with (github.com/JornC/picom),
 which is picom's `next` branch plus one commit per feature. That branch is not published
 yet. CI builds against it at `PICOM_REF` in `.github/workflows/ci.yml`.
@@ -30,12 +30,13 @@ headers of xcb and xcb-randr.
 The version is in the file `VERSION`. In a git checkout, `make` adds what `git describe`
 says: `0.1.0-12-gabc1234` once the tag `v0.1.0` exists, `0.1.0-gabc1234` before that,
 and `-dirty` for uncommitted changes. A release tarball has no `.git` and builds as plain
-`0.1.0`. `make VERSION=x` sets it by hand. It ends up in `build/version.h` and in the
-first line of `WS_DIRECTION_LOG`.
+`0.1.0`. `make VERSION=x` sets it by hand. It ends up in `build/version.h`, in
+`ws-direction --version`, and in the first line of `WS_DIRECTION_LOG`.
 
 ## Make targets
 
-- `make` (or `make all`) builds the plugin `build/ws-direction.so`.
+- `make` (or `make all`) builds the plugin `build/ws-direction.so` and the command
+  `build/ws-direction`.
 - `make check` builds and runs the unit tests, `build/unit-tests`. It needs no X server,
   so a package's check step can run it. `build/unit-tests WORD` runs only the tests
   whose name has WORD in it.
@@ -65,23 +66,23 @@ Variables:
 
 ### Unit tests
 
-`tests/unit` has 56 tests of the logic that works on the plugin's state: which monitor a
-`tests/unit` has 65 tests of the logic that works on the plugin's state: which monitor a
+`tests/unit` has 78 tests of the logic that works on the plugin's state: which monitor a
 workspace is on, the order of a monitor's workspaces, the steps of a switch, which
 workspace each monitor shows, which switch each show and hide is part of, and the
 variables, through `ws_compute`. They run in about 10 ms, without an X server. They link
-`desktop.o` and `passes.o`; `tests/unit/fixture.c` stands in for `plugin.c` (the state, a
-log into a buffer and a fake clock), gives a picom API that records the animations
-started, and plays what a window manager does: maps, unmaps and changes of the current
-desktop, as the events a read takes in.
+`desktop.o`, `passes.o` and `overview.o`; `tests/unit/fixture.c` stands in for
+`plugin.c` (the state, a log into a buffer and a fake clock), gives a picom API that
+records the animations started, and plays what a window manager does: maps, unmaps and
+changes of the current desktop, as the events a read takes in.
 
 `tests/unit/test.h` is the runner, about 100 lines. Write a test as `TEST(name) { ... }`
 in any `tests/unit/*.c`; the runner finds it. `CHECK`, `CHECK_INT`, `CHECK_STR` and
 `CHECK_HAS` end the test when they fail. CI runs them with gcc and clang, with
 `-Werror`, and with ASan and UBSan.
 
-Without X the unit tests can't reach `desktop.c`'s reading of the X server's replies, or
-`plugin.c`'s frame callback and constructor. The harness covers those.
+Without X the unit tests can't reach `desktop.c`'s reading of the X server's replies,
+the clicks and the commands in `overview.c`, `plugin.c`'s frame callback and
+constructor, or `cmd.c`. The harness covers those.
 
 ### The harness
 
@@ -129,8 +130,13 @@ fonts.
 - `src/desktop.c`: reads the monitors, the workspaces and the managed windows from the
   X server.
 - `src/passes.c`: finds switches, starts `ws-pass`, and works out the variables.
-- `src/ws_direction.h`: the plugin's internal header.
+- `src/overview.c`: unfolds and folds the overview, takes the clicks, and does the
+  commands.
+- `src/cmd.c`: the `ws-direction` command.
+- `src/protocol.h`: what the plugin and the command share. `src/ws_direction.h`: the
+  plugin's internal header.
 - `styles/`: the styles.
+- `man/ws-direction.1`: the man page, in plain roff.
 
 ## Code style
 

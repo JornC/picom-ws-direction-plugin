@@ -42,8 +42,13 @@ static bool fake_start_animation(uint32_t window, const char *trigger) {
 	return true;
 }
 
+static bool fake_window_has_image([[maybe_unused]] uint32_t window) {
+	return true;
+}
+
 static const struct picom_api fake_api = {
     .start_animation = fake_start_animation,
+    .window_has_image = fake_window_has_image,
 };
 
 static void free_clients(struct ws_client *clients, unsigned n) {
@@ -51,6 +56,18 @@ static void free_clients(struct ws_client *clients, unsigned n) {
 		free(clients[i].workspace);
 	}
 	free(clients);
+}
+
+/// Remove window `id` from the windows the window manager manages: it closed.
+void fx_close(xcb_window_t id) {
+	for (unsigned i = 0; i < wsd.n_clients; i++) {
+		if (wsd.clients[i].id == id) {
+			free(wsd.clients[i].workspace);
+			wsd.clients[i] = wsd.clients[--wsd.n_clients];
+			return;
+		}
+	}
+	abort();
 }
 
 static struct ws_client *copy_clients(const struct ws_client *clients, unsigned n) {
@@ -245,6 +262,9 @@ static struct fx_values compute(struct picom_animation_start start) {
 	    .face = v[WS_VAR_FACE],
 	    .selected = v[WS_VAR_SELECTED],
 	    .placed = v[WS_VAR_PLACED],
+	    .index = v[WS_VAR_INDEX],
+	    .shown = v[WS_VAR_SHOWN],
+	    .unfolded = v[WS_VAR_UNFOLDED],
 	};
 }
 

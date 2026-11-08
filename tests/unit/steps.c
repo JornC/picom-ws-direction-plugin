@@ -146,4 +146,6 @@ TEST(steps_switch_from_a_workspace_that_is_gone) {
 	CHECK_STR(t->switches[0].list[2], "3");
 	auto v = fx_compute(0x101, "size");
 	CHECK_INT(v.faces, 3);
+	CHECK_INT(v.index, 0);
+	CHECK_INT(v.shown, 2);
 }

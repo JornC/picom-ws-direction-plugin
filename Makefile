@@ -1,8 +1,10 @@
-# picom plugin: workspace slide direction and workspace monitor for animation scripts.
-# Needs plugin API 0.7 of the picom fork (add_animation_variable, add_frame_callback,
-# start_animation, add_animation_trigger, pause_screen and add_wakeup_fd). make finds the
-# installed picom's headers with pkg-config picom-api. If the installed picom doesn't
-# have the API, point PICOM_API_CFLAGS at a picom tree that does, e.g.
+# picom plugin: workspace slide direction and workspace monitor for animation scripts, and
+# the ws-direction command that a window manager config calls.
+# Needs plugin API 0.9 of the picom fork (add_animation_variable, add_frame_callback,
+# start_animation, window_has_image, add_animation_trigger, pause_screen, add_wakeup_fd
+# and window_at). make finds the installed picom's headers with pkg-config picom-api. If
+# the installed picom doesn't have the API, point PICOM_API_CFLAGS at a picom tree that
+# does, e.g.
 #   make PICOM_API_CFLAGS=-I/path/to/picom/include
 PKG_CONFIG ?= pkg-config
 # picom-api.pc's Cflags name include/picom, but the code includes <picom/api.h>, so the
@@ -38,13 +40,20 @@ override CFLAGS += -std=gnu23 -Wall -Wextra -Wfatal-errors -Ibuild $(PICOM_API_C
 	$(shell $(PKG_CONFIG) --cflags xcb xcb-randr)
 LDLIBS = $(shell $(PKG_CONFIG) --libs xcb xcb-randr)
 
-# The plugin is every file in src/.
-PLUGIN_OBJS = $(patsubst src/%.c,build/%.o,$(wildcard src/*.c))
+# The plugin is every file in src/ but cmd.c, which is the command.
+PLUGIN_OBJS = $(patsubst src/%.c,build/%.o,$(filter-out src/cmd.c,$(wildcard src/*.c)))
 
-all: build/ws-direction.so
+all: build/ws-direction.so build/ws-direction
 
 build/ws-direction.so: $(PLUGIN_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -shared -o $@ $^ $(LDLIBS)
+
+build/ws-direction: build/cmd.o
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(shell $(PKG_CONFIG) --libs xcb)
+
+build/cmd.o: src/cmd.c
+	@mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c -o $@ $<
 
 build/%.o: src/%.c
 	@mkdir -p build
@@ -54,7 +63,7 @@ build/%.o: src/%.c
 # The unit tests check the logic that works on the plugin's state, without an X server.
 # They link the modules that hold it; tests/unit/fixture.c stands in for plugin.c.
 UNIT_OBJS = $(patsubst tests/unit/%.c,build/unit/%.o,$(wildcard tests/unit/*.c))
-UNIT_MODULES = build/desktop.o build/passes.o
+UNIT_MODULES = build/desktop.o build/passes.o build/overview.o
 
 build/unit/%.o: tests/unit/%.c
 	@mkdir -p build/unit
@@ -83,18 +92,18 @@ build/version.h: FORCE
 	@mkdir -p build
 	@echo '#define WS_DIRECTION_VERSION "$(VERSION)"' >$@.new
 	@if cmp -s $@.new $@; then rm $@.new; else mv $@.new $@; fi
-build/plugin.o: build/version.h
+build/cmd.o build/plugin.o: build/version.h
 FORCE:
 
 # Puts the plugin and the styles where picom finds them by name, for
 #   plugins = "ws-direction.so";   and   @include "ws-direction/slide.conf"
-# It overwrites what is in STYLEDIR: keep your own copies of styles next to picom.conf
-# instead. By default for one user: the plugin and the styles in picom's config
-# directory, where picom finds plugins and includes, and the man page under PREFIX, once
-# man/ws-direction.1 exists. A package sets DESTDIR, PREFIX=/usr, STYLEDIR, and
-# PLUGINDIR to picom's plugin directory: picom/plugins under the library directory picom
-# was installed to, e.g. /usr/lib/picom/plugins. The picom fork finds the plugin there
-# by name; picom releases need its full path in plugins. E.g.
+# and the command on the PATH, with its man page. It overwrites what is in STYLEDIR: keep
+# your own copies of styles next to picom.conf instead. By default for one user: the
+# plugin and the styles in picom's config directory, where picom finds plugins and
+# includes, and the command and the man page under PREFIX. A package sets DESTDIR,
+# PREFIX=/usr, STYLEDIR, and PLUGINDIR to picom's plugin directory: picom/plugins under
+# the library directory picom was installed to, e.g. /usr/lib/picom/plugins. The picom
+# fork finds the plugin there by name; picom releases need its full path in plugins. E.g.
 #   make install DESTDIR=... PREFIX=/usr PLUGINDIR=/usr/lib/picom/plugins \
 #       STYLEDIR=/etc/xdg/picom/include/ws-direction
 PICOM_CONFIG_DIR ?= $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/picom
@@ -110,11 +119,12 @@ MAN = $(wildcard man/ws-direction.1)
 install: all
 	install -Dm755 build/ws-direction.so $(DESTDIR)$(PLUGINDIR)/ws-direction.so
 	install -Dm644 -t $(DESTDIR)$(STYLEDIR) $(addprefix styles/,$(STYLES))
+	install -Dm755 build/ws-direction $(DESTDIR)$(BINDIR)/ws-direction
 	$(if $(MAN),install -Dm644 $(MAN) $(DESTDIR)$(MANDIR)/man1/ws-direction.1)
 
 # Removes what install puts in place, and STYLEDIR if that leaves it empty.
 uninstall:
-	rm -f $(DESTDIR)$(PLUGINDIR)/ws-direction.so \
+	rm -f $(DESTDIR)$(PLUGINDIR)/ws-direction.so $(DESTDIR)$(BINDIR)/ws-direction \
 		$(addprefix $(DESTDIR)$(STYLEDIR)/,$(STYLES)) \
 		$(if $(MAN),$(DESTDIR)$(MANDIR)/man1/ws-direction.1)
 	rmdir --ignore-fail-on-non-empty $(DESTDIR)$(STYLEDIR) 2>/dev/null || true

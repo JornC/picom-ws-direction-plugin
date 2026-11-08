@@ -4,36 +4,10 @@
 /// picom plugin that works out the direction of a workspace switch, so animation scripts
 /// can slide windows the right way, the monitor of a window's workspace, so they can
 /// crop to it, and where the window's workspace is among the monitor's workspaces, so
-/// they can draw the workspaces a switch passes. Animation variables:
-///
-///   plugin-ws-direction-direction
-///       1 if the new workspace sorts after the old one, -1 if before, 0 if the
-///       animation is not part of a workspace switch on the window's monitor.
-///   plugin-ws-direction-distance
-///       how many of the monitor's workspaces the switch moved: 1 to the next one, 2 when
-///       it passes one, and so on. Only workspaces that exist count. 0 when the direction
-///       is 0.
-///   plugin-ws-direction-monitor-x/y/width/height
-///       the monitor that shows the window's workspace, also while the workspace is
-///       hidden. For a window that is not on one workspace: the monitor that fully
-///       contains the window, else the whole screen (like window-monitor-*). For a window
-///       that closes: always the whole screen, as the window is gone and can't be looked
-///       up; use window-monitor-* there.
-///   plugin-ws-direction-faces
-///       how many workspaces that monitor has.
-///   plugin-ws-direction-face
-///       how many of the monitor's workspaces the window's workspace is away from the
-///       reference workspace, counted like distance: positive if it sorts after it,
-///       negative if before. The reference workspace is the one the monitor showed before
-///       the switch, or the one it shows now if the animation is not part of a switch. So
-///       in a switch the windows that leave have 0 and the windows that arrive have
-///       direction * distance. 0 for a window that is not on one workspace.
-///   plugin-ws-direction-selected
-///       1 if that monitor shows the current workspace (_NET_CURRENT_DESKTOP), else 0.
-///   plugin-ws-direction-placed
-///       0 if the window is on one workspace but its centre is not on that workspace's
-///       monitor, else 1. A window keeps its place while its workspace is hidden, also
-///       when it is moved to a workspace of another monitor.
+/// they can draw the workspaces a switch passes. Its animation variables are
+/// plugin-ws-direction-direction, -distance, -monitor-x, -monitor-y, -monitor-width,
+/// -monitor-height, -faces, -face, -selected, -placed, -index, -shown and -unfolded (enum
+/// ws_variable). The README, under Reference, and the man page say what each one is.
 ///
 /// A window is on one workspace if the window manager lists it in _NET_CLIENT_LIST, its
 /// _NET_WM_DESKTOP names one desktop, and it doesn't have _NET_WM_STATE_HIDDEN (i3 sets
@@ -41,8 +15,9 @@
 ///
 /// For workspaces it only uses EWMH data the window manager already sets:
 /// _NET_CURRENT_DESKTOP, _NET_DESKTOP_NAMES, _NET_DESKTOP_VIEWPORT and _NET_CLIENT_LIST
-/// on the root window, and _NET_WM_DESKTOP and _NET_WM_STATE on client windows. Monitors
-/// come from RandR, a window's place from GetGeometry and TranslateCoordinates.
+/// on the root window, and _NET_WM_DESKTOP and _NET_WM_STATE on client windows, and the
+/// _NET_ACTIVE_WINDOW request that pagers send. Monitors come from RandR, a window's
+/// place from GetGeometry and TranslateCoordinates.
 ///
 /// The order in which a window manager changes these properties and maps and unmaps
 /// windows is not specified, and those changes can reach picom over several frames. So we
@@ -75,6 +50,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "protocol.h"
 #include "version.h"
 #include "ws_direction.h"
 
@@ -98,6 +74,9 @@ static const char *const ws_variable_names[] = {
     [WS_VAR_FACE] = "face",
     [WS_VAR_SELECTED] = "selected",
     [WS_VAR_PLACED] = "placed",
+    [WS_VAR_INDEX] = "index",
+    [WS_VAR_SHOWN] = "shown",
+    [WS_VAR_UNFOLDED] = "unfolded",
 };
 static_assert(sizeof(ws_variable_names) / sizeof(ws_variable_names[0]) == WS_N_VARIABLES,
               "every variable needs a name");
@@ -155,13 +134,13 @@ static double ws_provide(const struct picom_animation_start *start, void *user_d
 }
 
 /// Whether xcb has an event of ours in its queue, which it read while we waited for a
-/// reply, or we took one that the next read must take in. picom asks before it sleeps,
-/// see add_wakeup_fd.
+/// reply, or we took one that the next read must take in, or a command waits. picom asks
+/// before it sleeps, see add_wakeup_fd.
 static bool ws_pending([[maybe_unused]] void *user_data) {
 	if (wsd.queued == NULL) {
 		wsd.queued = xcb_poll_for_queued_event(wsd.c);
 	}
-	return wsd.queued != NULL || wsd.read.needed;
+	return wsd.queued != NULL || wsd.read.needed || wsd.n_commands > 0;
 }
 
 static xcb_generic_event_t *ws_next_event(void) {
@@ -176,9 +155,10 @@ static void ws_add_event(enum ws_event_type type, xcb_window_t window, uint32_t 
 }
 
 /// Take all events, so they don't pile up in the connection's queue: the root window's
-/// property changes, and the maps, unmaps and changes of top-level windows. The server
-/// also sends every client a few, like MappingNotify. Sets wsd.read.needed for a change
-/// that the next read must take in.
+/// property changes, the maps, unmaps and changes of top-level windows, and the clicks
+/// while a monitor is unfolded. The server also sends every client a few, like
+/// MappingNotify. Sets wsd.read.needed for a change that the
+/// next read must take in.
 void ws_take_events(void) {
 	xcb_generic_event_t *event;
 	while ((event = ws_next_event()) != NULL) {
@@ -197,6 +177,23 @@ void ws_take_events(void) {
 			wsd.read.needed |= root;
 			break;
 		}
+		case XCB_CLIENT_MESSAGE: {
+			auto e = (xcb_client_message_event_t *)event;
+			if (e->window != wsd.owner || e->type != wsd.a_command ||
+			    e->format != 32) {
+				break;
+			}
+			wsd.commands =
+			    ws_grow(wsd.commands, wsd.n_commands + 1, sizeof(*wsd.commands));
+			memcpy(wsd.commands[wsd.n_commands++].data, e->data.data32,
+			       sizeof(wsd.commands[0].data));
+			break;
+		}
+		case XCB_SELECTION_CLEAR:
+			ws_log("Another program took our selection: the ws-direction "
+			       "command "
+			       "talks to it now");
+			break;
 		case XCB_MAP_NOTIFY:
 			ws_add_event(WS_EVENT_MAP,
 			             ((xcb_map_notify_event_t *)event)->window, sequence);
@@ -213,8 +210,26 @@ void ws_take_events(void) {
 		case XCB_GRAVITY_NOTIFY:
 		case XCB_CIRCULATE_NOTIFY:
 			// A move or a restack changes no workspace, and a start reads for
-			// itself.
+			// itself. The overview's input windows follow the stack.
+			wsd.read.needed |= ws_any_unfolded();
 			break;
+		case XCB_BUTTON_PRESS:
+		case XCB_BUTTON_RELEASE: {
+			// The pick comes on the release.
+			auto e = (xcb_button_press_event_t *)event;
+			if (e->detail > 1 && type == XCB_BUTTON_PRESS && ws_any_unfolded()) {
+				ws_button(e->detail);
+			} else if (e->detail == 1 && type == XCB_BUTTON_PRESS) {
+				wsd.click.pressed = true;
+				wsd.click.x = e->root_x;
+				wsd.click.y = e->root_y;
+			} else if (e->detail == 1 && wsd.click.pressed) {
+				wsd.click.pressed = false;
+				wsd.click.pending = true;
+				wsd.click.time = e->time;
+			}
+			break;
+		}
 		default: break;
 		}
 		free(event);
@@ -249,10 +264,28 @@ static void ws_frame(uint64_t frame, [[maybe_unused]] void *user_data) {
 			wsd.read.paused = false;
 			wsd.api->pause_screen("plugin-ws-direction", 0, 0);
 		}
+		ws_place_inputs();
 	}
 	// A read that picom's provider made, after the callback of its pass, may have
 	// recorded switches too.
-	ws_start_passes();
+	if (ws_start_passes()) {
+		ws_pick_done();
+	}
+	if (wsd.n_commands > 0) {
+		ws_run_commands();
+	}
+	// After a read, here or in picom's provider.
+	if (wsd.read_frame != wsd.refreshed_read && ws_any_unfolded()) {
+		ws_overview_refresh();
+	}
+	wsd.refreshed_read = wsd.read_frame;
+	ws_overview_retry();
+	if (wsd.click.pending) {
+		wsd.click.pending = false;
+		if (ws_any_unfolded()) {
+			ws_pick();
+		}
+	}
 }
 
 __attribute__((constructor)) static void ws_init(void) {
@@ -297,6 +330,7 @@ __attribute__((constructor)) static void ws_init(void) {
 	wsd.a_client_list = ws_atom("_NET_CLIENT_LIST");
 	wsd.a_wm_state = ws_atom("_NET_WM_STATE");
 	wsd.a_wm_state_hidden = ws_atom("_NET_WM_STATE_HIDDEN");
+	wsd.a_active_window = ws_atom("_NET_ACTIVE_WINDOW");
 
 	// Selected before the first read, so no change after it is missed.
 	xcb_change_window_attributes(wsd.c, wsd.root, XCB_CW_EVENT_MASK,
@@ -319,11 +353,14 @@ __attribute__((constructor)) static void ws_init(void) {
 		        "not adding the plugin-ws-direction-* variables");
 		return;
 	}
-	// So the user's config can use it without listing it in animation-triggers. Like
-	// the variables, only once the frame callback, which starts it, is there.
-	if (!api->add_animation_trigger(WS_PASS_TRIGGER)) {
-		ws_fail("could not declare the trigger %s", WS_PASS_TRIGGER);
-		return;
+	// So the user's config can use them without listing them in animation-triggers.
+	// Like the variables, only once the frame callback, which starts them, is there.
+	const char *const triggers[] = {WS_PASS_TRIGGER, WS_UNFOLD_TRIGGER, WS_FOLD_TRIGGER};
+	for (size_t i = 0; i < sizeof(triggers) / sizeof(triggers[0]); i++) {
+		if (!api->add_animation_trigger(triggers[i])) {
+			ws_fail("could not declare the trigger %s", triggers[i]);
+			return;
+		}
 	}
 	for (uintptr_t i = 0; i < WS_N_VARIABLES; i++) {
 		if (!api->add_animation_variable("plugin-ws-direction", ws_variable_names[i],
@@ -331,5 +368,13 @@ __attribute__((constructor)) static void ws_init(void) {
 			ws_fail("could not add plugin-ws-direction-%s", ws_variable_names[i]);
 			return;
 		}
+	}
+	if (!ws_overview_init(screen_num)) {
+		ws_fail("another program owns the selection " WS_SELECTION_PREFIX "%d, "
+		        "maybe "
+		        "another picom with the plugin: the ws-direction command talks "
+		        "to it, not "
+		        "to this one",
+		        screen_num);
 	}
 }

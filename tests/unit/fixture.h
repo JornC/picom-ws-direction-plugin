@@ -2,8 +2,9 @@
 // Copyright (c) JornC
 
 /// What the unit tests share: stand-ins for what plugin.c gives the other modules (the
-/// state, the log, the clock and the starts), and helpers that set up monitors,
-/// workspaces and windows, and play what a window manager does: maps, unmaps and changes
+/// state, the log and the clock), a picom API that records the animations it starts and
+/// whose window_has_image says yes, and helpers that set up monitors, workspaces and
+/// windows, and play what a window manager does: maps, unmaps and changes
 /// of the current desktop, as the events a read takes in. Nothing here talks to an X
 /// server: the tests call only functions that work on the state.
 
@@ -32,7 +33,8 @@ extern unsigned test_n_starts;
 
 /// The variables ws_compute works out for a window, by name.
 struct fx_values {
-	double direction, distance, x, y, width, height, faces, face, selected, placed;
+	double direction, distance, x, y, width, height, faces, face, selected, placed,
+	    index, shown, unfolded;
 };
 
 /// Forget everything: no monitors, workspaces or windows, a screen of 4520x1920.
@@ -52,6 +54,8 @@ struct ws_client *fx_client(xcb_window_t id);
 /// The window manager maps or unmaps window `id`.
 void fx_map(xcb_window_t id);
 void fx_unmap(xcb_window_t id);
+/// Window `id` closes: the window manager no longer lists it.
+void fx_close(xcb_window_t id);
 /// The window manager sets _NET_CURRENT_DESKTOP to `desktop`.
 void fx_current(unsigned desktop);
 /// Read the root window and the windows, and take the events since the last read.
