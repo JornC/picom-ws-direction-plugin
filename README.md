@@ -5,27 +5,65 @@ workspace switch went, and which monitor a window's workspace is on. With it a `
 `hide` animation can move windows the right way and keep them on their monitor. picom
 itself knows nothing about workspaces: the plugin reads the window manager's EWMH
 properties and hands the scripts five numbers. What the scripts do with them is up to
-you; `styles/` has seven to start from.
+you; `styles/` has seven switch styles to start from.
 
 ![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
 horizontal on the portrait one](docs/slide.gif)
 
-It needs a picom with plugin API 0.2, which adds the animation variable hook. No picom
-release has it yet; the `hook-v2` branch of https://github.com/JornC/picom is based on
-picom's `next` branch, with the hook added. An older picom logs `ws-direction: picom's plugin
-API is not compatible` and runs without the variables.
+![All seven styles at once, going through the same workspace switches](docs/styles.gif)
+
+The GIFs are recorded on Xvfb with i3 and picom's xrender backend, at a quarter of a
+3440x1440 + 1080x1920 layout, with the windows cropped below the i3 bar, and cascade with
+`use-damage = false` (see [Troubleshooting](#troubleshooting)); `docs/record-styles.sh`
+makes them.
+
+## Requirements
+
+- **picom with plugin API 0.2 of the picom fork**: the animation variable hook. No picom
+  release has it yet. It is proposed to picom upstream, and the picom fork this plugin
+  is developed with has it. Upstream picom numbers its plugin API on its own (it is at
+  0.1); once it has the hook, the plugin will ask for upstream's number. Any other picom
+  prints `ws-direction: picom's plugin API is not compatible` and runs without the
+  variables, so every animation whose script reads one fails to load.
+- **X11**. The monitors come from RandR.
+- **An EWMH window manager.** It is tested with i3 only. See
+  [Window manager integration](#window-manager-integration) for what the plugin needs
+  from it.
+- To build: make, pkg-config, a C23 compiler (GCC 14 or clang 18 and later), and the
+  headers of xcb and xcb-randr.
 
 ## Install
 
     make
     make install
 
-`make` builds `build/ws-direction.so` against the installed `<picom/api.h>`, with a C23
-compiler (GCC 14 or clang 18 and later); to build
-against a picom source tree instead, run `make PICOM_API_CFLAGS=-I/path/to/picom/include`.
-`make install` copies the plugin to `~/.config/picom/plugins/` and the styles to
-`~/.config/picom/include/ws-direction/`, where picom finds them by name. Then, in
-`picom.conf`:
+`make` builds the plugin `build/ws-direction.so`. It finds picom's headers
+(`<picom/api.h>`) with `pkg-config --cflags picom-api`. To build against a picom source
+tree instead, run `make PICOM_API_CFLAGS=-I/path/to/picom/include`.
+
+`make install` puts the plugin in `~/.config/picom/plugins/` and the styles in
+`~/.config/picom/include/ws-direction/`. picom finds them there by name. `~/.config` is
+`$XDG_CONFIG_HOME` when that is set. `PICOM_CONFIG_DIR`, `PLUGINDIR`, `STYLEDIR` and
+`DESTDIR` change where things go. `make install` overwrites what is in the style
+directory, so keep your own copies of styles elsewhere (see [Styles](#styles)).
+`make uninstall`, with the same variables, removes what `make install` put in place, and
+the style directory if that leaves it empty.
+
+A package installs the plugin in picom's plugin directory, which is `picom/plugins/` under
+the library directory picom was installed to, for example `/usr/lib/picom/plugins/`. The
+picom fork finds it there by name; picom releases need its full path in `plugins`. The
+styles go to `/etc/xdg/picom/include/ws-direction/`:
+
+    make install DESTDIR=... PREFIX=/usr PLUGINDIR=/usr/lib/picom/plugins \
+        STYLEDIR=/etc/xdg/picom/include/ws-direction
+
+picom looks for styles there too, after `~/.config/picom/include/`.
+
+Without `make install`, give the plugin and the style by their full path.
+
+## Quick start
+
+In `picom.conf`, load the plugin and include a style in a rule:
 
     plugins = "ws-direction.so";
     rules = ({
@@ -33,9 +71,12 @@ against a picom source tree instead, run `make PICOM_API_CFLAGS=-I/path/to/picom
       @include "ws-direction/slide.conf"
     });
 
-Without `make install`, give both by their full path. picom releases up to v13 only find
-a plugin by name when it comes from `--plugins`, not from the config file (fixed in
-yshui/picom#1547).
+To check that it works:
+
+- Start picom with `WS_DIRECTION_LOG=/path/to/file` in its environment. The plugin writes
+  `ws-direction <version>` there when picom loads it, and then a line for every switch it
+  sees and for every animation that reads its variables, with the values and why. If the
+  plugin could not start, the line after the version says why.
 
 ## Styles
 
@@ -45,8 +86,6 @@ of each monitor: up and down on a landscape monitor, sideways on a portrait one.
 animation is not part of a workspace switch, every style gives the window a short fade.
 Each style has a `var-length` near the top, in seconds: make it larger for a slower
 switch.
-
-![All seven styles at once, going through the same workspace switches](docs/styles.gif)
 
 - **slide**: the new workspace pushes the old one out.
 - **push**: the new workspace slides in over the old one, which drifts back, like a card
@@ -62,74 +101,116 @@ switch.
 - **zoom-pan**: the view zooms out, pans to the new workspace and zooms back in, as if
   the workspaces were tiles side by side.
 
-The GIFs are recorded on Xvfb with i3, at a quarter of a 3440x1440 + 1080x1920 layout,
-with the windows cropped below the i3 bar, and cascade with `use-damage = false` (see
-Limits); `docs/record-styles.sh` makes them.
+The styles are plain picom animation scripts, and each file explains in its header how
+it works and which `var-*` you can change. To change one, copy it into your config
+instead of including it. Or copy the file to `ws-direction/` next to your `picom.conf`
+(`~/.config/picom/ws-direction/`) and keep the `@include`: picom looks there first, so
+the copy wins over both install places, and neither `make install` nor a package writes
+there. A copy in `~/.config/picom/include/ws-direction/` also wins over the package's,
+but `make install` overwrites it. Save `picom.conf` once after you make a copy: picom
+reloads when a file it read changes, and it didn't read the new copy yet.
 
-The styles are plain picom animation scripts. To change one, copy it into your config
-instead of including it; each file explains how it works.
+## Writing a style
 
-## Variables
+A style is a set of picom animations (see picom(1)) whose scripts read the plugin's
+variables, listed under [Variables](#variables). A switch style moves a window by
+`plugin-ws-direction-direction`, crops it to the `plugin-ws-direction-monitor-*` rect so
+it doesn't spill onto the other monitor, and gives it a short fade when the direction is
+zero. picom asks the plugin for the values only when an animation whose script reads one
+starts.
+
+## Reference
+
+### Variables
 
 `plugin-ws-direction-direction`
-: 1 if the new workspace sorts after the old one, -1 if before, 0 if the animation was
-  not caused by a workspace switch on the window's monitor (a new window, scratchpad,
+: 1 if the new workspace sorts after the old one, -1 if before, 0 if the animation is
+  not part of a workspace switch on the window's monitor (a new window, scratchpad,
   fullscreen, a window moved to another workspace).
 
 `plugin-ws-direction-monitor-x`, `plugin-ws-direction-monitor-y`,
 `plugin-ws-direction-monitor-width`, `plugin-ws-direction-monitor-height`
-: The monitor that shows the window's workspace. For other windows and triggers: the
-  monitor that fully contains the window, else the whole screen (like
+: The monitor that shows the window's workspace. For a window that is not on one
+  workspace: the monitor that fully contains the window, else the whole screen (like
   `window-monitor-*`). For a window that closes: always the whole screen, as the window
   is gone and can't be looked up; use `window-monitor-*` there.
 
 Workspaces sort in the order of `_NET_DESKTOP_NAMES`; under i3 that is the order of the
 workspace numbers, with unnumbered names after them.
 
-## How it works
+### Environment
 
-The plugin reads `_NET_CURRENT_DESKTOP`, `_NET_DESKTOP_NAMES` and `_NET_DESKTOP_VIEWPORT`
-on the root window and `_NET_WM_DESKTOP` on client windows, the monitors from RandR, and
-a window's place with `GetGeometry`. The order in which a window manager changes these
-properties and maps or unmaps windows is not specified, and the changes can reach picom
-over several frames, so the plugin does not act on events. It remembers, per monitor,
-the workspaces shown recently and when it last saw a part of each switch. When a window
-starts an animation whose script reads a variable, it looks for a recent switch to or
-away from the window's workspace on its monitor. All five variables of a window are
-worked out in one go, and the root window is read once per picom update pass
-(`start->frame`), however many windows start in it.
+`WS_DIRECTION_LOG`
+: Set it in picom's environment to a file, and the plugin logs every decision there, in
+  picom's log format. The first line is `ws-direction <version>`.
 
-## Limits
+`DISPLAY`
+: The plugin connects to the display it names, like picom itself. Without that
+  connection the plugin adds no variables.
+## Window manager integration
 
-- Tested with i3 only.
-- With picom's xrender backend, cascade can flicker: during a switch, a window that is
+### i3
+
+Under i3, the current workspace (`_NET_CURRENT_DESKTOP`) is the focused one, and each
+monitor has workspaces of its own, which i3 tells through `_NET_DESKTOP_VIEWPORT`.
+
+### Other EWMH window managers
+
+The plugin uses only what an EWMH window manager already does. It reads:
+
+- on the root window: `_NET_CURRENT_DESKTOP`, `_NET_DESKTOP_NAMES` (the workspaces and
+  their order) and `_NET_DESKTOP_VIEWPORT` (which monitor each workspace is on);
+- on client windows: `_NET_WM_DESKTOP`;
+- the monitors from RandR, and a window's place with `GetGeometry`.
+
+## Troubleshooting
+
+- **Nothing animates, and picom logs `variable name "plugin-ws-direction-direction" is
+  not defined`.** The plugin's variables aren't there. Either picom didn't load the
+  plugin (picom up to v13 finds it by name only from `--plugins`; give the full path),
+  or the plugin could not start: then a line that starts with `ws-direction:` on picom's
+  standard error says why, and so does `WS_DIRECTION_LOG` (the plugin doesn't write to
+  picom's `--log-file`). `picom's plugin API is not compatible` means it needs another
+  plugin API of the picom fork; others say it could not connect to the X server.
+- **Windows blink when you go back to a workspace while its windows still move away.**
+  This happens with picom releases. When a window maps again, picom draws its new pixmap
+  from the first damage on. On some drivers (seen on NVIDIA) the X server sends that
+  damage itself, before the program draws, while the pixmap still holds what lies under
+  the window, so for a few frames the window shows the wallpaper. picom's usual fade-in
+  hides this; styles that keep windows opaque during a switch do not. The fork's main
+  keeps drawing the old image until the window drew all of its new pixmap, or until its
+  animation ends; a window whose size changed while its workspace was hidden shows its
+  old image stretched to its new size until then.
+- **cascade flickers.** With picom's xrender backend, during a switch, a window that is
   already moving in is sometimes not drawn for a frame or two. That is a bug in the
   xrender backend, not in the style; the glx backend doesn't have it, and with
   `use-damage = false` it doesn't happen either.
-- A switch is only seen when a window starts an animation whose script reads the
-  variables. A switch made while picom is unredirected (`unredir-if-possible`) may not be
-  seen; the next switch is then judged against the last workspace the plugin saw.
-- Each animation start costs one round trip to the X server, on picom's main thread. On
-  a quiet server that is about 20 µs (median 17 to 18 µs, measured on Xvfb with i3).
-  When the server is busy, the reply waits behind its other work, and a start can take a
-  few milliseconds (up to 5 to 7 ms in our busiest runs). Every window that starts an
-  animation in a pass waits once, and a workspace switch starts one for every window that
-  shows or hides.
-- A switch stays matched to its windows for 100 ms, or for 2 passes within 250 ms when
-  frames are slow. On a heavily loaded machine a switch can take longer; the windows
-  that come late then get 0.
-- The plugin reads X on its own connection. The read happens after picom has handled the
-  events of the pass, but it is not ordered against picom's own request queue.
+- **A switch has no animation, or a window that shows or hides fades.** A switch is only
+  seen when a window starts an animation whose script reads the variables, and a window
+  belongs to a switch for 100 ms, or for 2 passes within 250 ms when frames are slow. A
+  switch made while picom has the screen unredirected (`unredir-if-possible`), and a
+  window that comes later on a heavily loaded machine, get 0.
+- **A changed copy of a style doesn't take effect.** Save `picom.conf` once after you
+  make the copy, so picom reads it.
 
-## Tests
+## How it works
 
-`tests/run.sh` starts a nested Xvfb with two monitors, i3 and a tiny fake window
-manager, and checks the direction logged for every window that shows, opens or hides,
-plus screenshots of slowed-down slides. It needs Xvfb, xrandr, i3, xterm, xdotool, xprop,
-ImageMagick, a C compiler and a picom with the hook:
+The plugin reads the properties listed under
+[Other EWMH window managers](#other-ewmh-window-managers). The order in which a window
+manager changes these properties and maps or unmaps windows is not specified, and the
+changes can reach picom over several frames, so the plugin does not act on events. It
+remembers, per monitor, the workspaces shown recently and when it last saw a part of
+each switch. When a window starts an animation whose script reads a variable, it looks
+for a recent switch to or away from the window's workspace on its monitor. All
+variables of a window are worked out in one go, and the root window is read once per
+picom update pass, however many windows start in it.
 
-    make
-    PICOM=/path/to/picom tests/run.sh
+The plugin reads X on its own connection. The read happens after picom has handled the
+events of the pass, but it is not ordered against picom's own request queue.
 
-Run it alone, not next to builds. Set `WS_DIRECTION_LOG` to a file to log every decision
-there, in picom's log format.
+## Development
+
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to build against the picom fork, run the
+harness (`tests/run.sh`), and what the rules for commits are.
+[CHANGELOG.md](CHANGELOG.md) lists what changed. The plugin is under the MPL-2.0, see
+`LICENSE`.
