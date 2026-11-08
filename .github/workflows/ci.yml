@@ -1,5 +1,5 @@
 # The plugin needs plugin API 0.9 of the picom fork, which only the fork has so far. Both
-# jobs fetch the fork at PICOM_REF from github.com/JornC/picom: its branch stack/main,
+# jobs fetch the fork at PICOM_REF from github.com/JornC/picom: its branch winanim,
 # until it is tagged.
 #
 # clang-format output differs between major versions, so the formatting check pins
@@ -14,7 +14,7 @@ on:
 
 env:
   PICOM_REPOSITORY: JornC/picom
-  PICOM_REF: stack/main
+  PICOM_REF: winanim
 
 jobs:
   build:
