@@ -40,7 +40,9 @@ Build and tests:
 - `make install` and `make uninstall`, with `DESTDIR`, `PREFIX`, `PLUGINDIR`,
   `STYLEDIR`, `BINDIR` and `MANDIR` for packages.
 - The version comes from `VERSION` and `git describe`.
-- The harness, `tests/run.sh`, runs on Xvfb with i3 and a fake window manager.
+- `make check` runs the unit tests without an X server. `make check-harness` runs the
+  harness, `tests/run.sh`, on Xvfb with i3 and a fake window manager, and
+  `make check-all` both.
 - `make lint`, `make format` and `make format-check`; `SANITIZE=address,undefined`.
 - A GitHub Actions workflow. It fetches the picom fork at `PICOM_REF`.
 - A README for users and developers, and a CONTRIBUTING.md.

@@ -2,9 +2,10 @@
 // Copyright (c) JornC
 
 /// The plugin's internal header: the types, the state and the functions that more than
-/// one of its modules uses. desktop.c reads the monitors, the workspaces and the managed
-/// windows from the X server. passes.c finds switches, starts ws-pass and works out the
-/// variables. plugin.c hooks them up to picom and calls them in every pass.
+/// one of its modules uses, or the unit tests in tests/unit. desktop.c reads the
+/// monitors, the workspaces and the managed windows from the X server. passes.c finds
+/// switches, starts ws-pass and works out the variables. plugin.c hooks them up to picom
+/// and calls them in every pass.
 
 #pragma once
 
@@ -94,6 +95,13 @@ struct ws_monitor {
 
 struct ws_rect {
 	int32_t x1, y1, x2, y2;
+};
+
+/// A workspace switch as a window sees it: which way it went, and how many workspaces of
+/// the monitor it moved. Both are 0 if the window's animation is not part of a switch.
+struct ws_move {
+	int direction;
+	unsigned distance;
 };
 
 /// A window the window manager manages.
@@ -217,8 +225,16 @@ bool ws_read_advance(uint64_t wait_us);
 void ws_read(void);
 
 // passes.c
+struct ws_monitor *ws_find_monitor(unsigned desktop);
 struct ws_monitor *ws_get_monitor(unsigned desktop, xcb_window_t w);
+struct ws_order ws_order_of(const char *name, unsigned position);
+int ws_order_compare(struct ws_order a, struct ws_order b);
+int ws_rect_monitor(struct ws_rect r);
+bool ws_passes(struct ws_order from, struct ws_order to, int index, unsigned desktop);
+struct ws_move ws_steps(struct ws_order from, struct ws_order to, int index);
+void ws_track_switch(bool root_changed);
 void ws_refresh(struct ws_root_requests requests);
+int ws_face(unsigned desktop, int index, struct ws_monitor *m, unsigned k);
 void ws_compute(const struct picom_animation_start *start,
                 double values[static WS_N_VARIABLES]);
 unsigned ws_unstarted_switch(const struct ws_monitor *m);

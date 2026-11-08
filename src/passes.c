@@ -38,7 +38,7 @@
 #define WS_SWITCH_LIFETIME_FRAMES 2
 #define WS_SWITCH_MAX_LIFETIME_US (250 * 1000)
 
-static struct ws_order ws_order_of(const char *name, unsigned position) {
+struct ws_order ws_order_of(const char *name, unsigned position) {
 	struct ws_order ret = {.position = position};
 	for (const char *p = name; *p >= '0' && *p <= '9'; p++) {
 		ret.numbered = true;
@@ -51,7 +51,7 @@ static struct ws_order ws_order_of(const char *name, unsigned position) {
 }
 
 /// Returns 1 if `a` sorts after `b`, -1 if it sorts before, 0 if they are the same.
-static int ws_order_compare(struct ws_order a, struct ws_order b) {
+int ws_order_compare(struct ws_order a, struct ws_order b) {
 	if (a.numbered != b.numbered) {
 		return a.numbered ? -1 : 1;
 	}
@@ -65,7 +65,7 @@ static int ws_order_compare(struct ws_order a, struct ws_order b) {
 }
 
 /// Index of the monitor that fully contains a window, -1 for "all monitors".
-static int ws_rect_monitor(struct ws_rect r) {
+int ws_rect_monitor(struct ws_rect r) {
 	for (int i = 0; i < wsd.n_monitors; i++) {
 		auto e = &wsd.monitors[i];
 		if (e->x1 <= r.x1 && r.x2 <= e->x2 && e->y1 <= r.y1 && r.y2 <= e->y2) {
@@ -81,7 +81,7 @@ static struct ws_rect ws_monitor_rect(int index) {
 }
 
 /// Find what we know about the monitor of a desktop. Returns NULL if nothing.
-static struct ws_monitor *ws_find_monitor(unsigned desktop) {
+struct ws_monitor *ws_find_monitor(unsigned desktop) {
 	auto index = ws_desktop_monitor(desktop);
 	for (unsigned i = 0; i < wsd.n_tracked; i++) {
 		auto m = &wsd.tracked[i];
@@ -96,16 +96,9 @@ static struct ws_visit *ws_shown(struct ws_monitor *m) {
 	return &m->visits[m->n_visits - 1];
 }
 
-/// A workspace switch as a window sees it: which way it went, and how many workspaces of
-/// the monitor it moved. Both are 0 if the window's animation is not part of a switch.
-struct ws_move {
-	int direction;
-	unsigned distance;
-};
-
 /// Whether desktop `desktop` is a workspace that a switch from `from` to `to` on the
 /// monitor with index `index` passes: one of that monitor that sorts between the two.
-static bool ws_passes(struct ws_order from, struct ws_order to, int index, unsigned desktop) {
+bool ws_passes(struct ws_order from, struct ws_order to, int index, unsigned desktop) {
 	auto low = ws_order_compare(to, from) > 0 ? from : to;
 	auto high = ws_order_compare(to, from) > 0 ? to : from;
 	auto order = ws_order_of(wsd.names[desktop], desktop);
@@ -116,7 +109,7 @@ static bool ws_passes(struct ws_order from, struct ws_order to, int index, unsig
 /// The way from workspace `from` to workspace `to` on the monitor with index `index`. The
 /// distance counts the workspaces of the monitor that sort between the two, as they are
 /// now: with i3, an empty workspace that isn't shown doesn't exist, so it doesn't count.
-static struct ws_move ws_steps(struct ws_order from, struct ws_order to, int index) {
+struct ws_move ws_steps(struct ws_order from, struct ws_order to, int index) {
 	struct ws_move ret = {.direction = ws_order_compare(to, from)};
 	if (ret.direction == 0) {
 		return ret;
@@ -241,10 +234,9 @@ static void ws_update_orders(void) {
 	}
 }
 
-/// Take the root window replies, and record a switch if the monitor of the current
-/// desktop now shows another workspace.
-void ws_refresh(struct ws_root_requests requests) {
-	bool root_changed = ws_read_root_reply(requests);
+/// Record a switch if the monitor of the current desktop now shows another workspace.
+/// `root_changed` is whether the root window's properties changed since the read before.
+void ws_track_switch(bool root_changed) {
 	ws_update_orders();
 	if (wsd.current < 0 || wsd.current >= wsd.n_names) {
 		return;
@@ -261,6 +253,12 @@ void ws_refresh(struct ws_root_requests requests) {
 		// The window manager is still updating the root window for this switch.
 		ws_switch_touch(shown);
 	}
+}
+
+/// Take the root window replies, and record a switch if the monitor of the current
+/// desktop now shows another workspace.
+void ws_refresh(struct ws_root_requests requests) {
+	ws_track_switch(ws_read_root_reply(requests));
 }
 
 /// The switch that a window of workspace `desktop` that shows is part of. Sets `*mp` to
@@ -405,7 +403,7 @@ ws_place_of(const struct picom_animation_start *start, xcb_window_t client, bool
 /// The face of a window of workspace `desktop` on the monitor with index `index`. The
 /// reference workspace is the one `m` showed before the switch to `m->visits[k]`, or the
 /// one it shows now if `k` is 0.
-static int ws_face(unsigned desktop, int index, struct ws_monitor *m, unsigned k) {
+int ws_face(unsigned desktop, int index, struct ws_monitor *m, unsigned k) {
 	auto order = ws_order_of(wsd.names[desktop], desktop);
 	auto reference = order;
 	if (k > 0) {

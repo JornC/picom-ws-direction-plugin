@@ -38,7 +38,8 @@
 # plugin's 100 ms switch lifetime on a loaded machine or under a sanitizer build. Rerun
 # it alone before treating that failure as a bug.
 #
-# Usage: make && tests/run.sh
+# Usage: make && tests/run.sh, or make check-harness; make check-all runs the unit tests
+# first.
 # Environment: PICOM (picom binary, default: picom on the PATH; it must have plugin API
 # 0.5), I3 (default /usr/bin/i3),
 # WSDIR_DISPLAY (default :91), WSDIR_WORK (directory for the i3 socket and logs, default

@@ -346,7 +346,8 @@ events of the pass, but it is not ordered against picom's own request queue.
 
 ## Development
 
-[CONTRIBUTING.md](CONTRIBUTING.md) says how to build against the picom fork, run the
-harness (`tests/run.sh`), and what the rules for commits are.
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to build against the picom fork, run the unit
+tests (`make check`, without an X server) and the harness (`make check-harness`), and
+what the rules for commits are.
 [CHANGELOG.md](CHANGELOG.md) lists what changed. The plugin is under the MPL-2.0, see
 `LICENSE`.

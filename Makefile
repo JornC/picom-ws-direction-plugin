@@ -51,7 +51,32 @@ build/%.o: src/%.c
 	$(picom_api_check)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -fvisibility=hidden -MMD -MP -c -o $@ $<
 
--include $(wildcard build/*.d)
+# The unit tests check the logic that works on the plugin's state, without an X server.
+# They link the modules that hold it; tests/unit/fixture.c stands in for plugin.c.
+UNIT_OBJS = $(patsubst tests/unit/%.c,build/unit/%.o,$(wildcard tests/unit/*.c))
+UNIT_MODULES = build/desktop.o build/passes.o
+
+build/unit/%.o: tests/unit/%.c
+	@mkdir -p build/unit
+	$(picom_api_check)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc -MMD -MP -c -o $@ $<
+
+build/unit-tests: $(UNIT_OBJS) $(UNIT_MODULES)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+# Only the unit tests, which need no X server: what a package's check step runs.
+check: build/unit-tests
+	build/unit-tests
+
+# The harness, tests/run.sh, which needs X, i3 and the picom fork. Its variables (PICOM,
+# WSDIR_DISPLAY and the others in tests/run.sh) reach it from make's command line or the
+# environment.
+check-harness: all
+	tests/run.sh
+
+check-all: check check-harness
+
+-include $(wildcard build/*.d build/unit/*.d)
 
 # Written again only when the version changes, so only then what includes it rebuilds.
 build/version.h: FORCE
@@ -111,4 +136,5 @@ lint:
 clean:
 	rm -rf build
 
-.PHONY: all install uninstall format format-check lint clean FORCE
+.PHONY: all check check-harness check-all install uninstall format format-check lint \
+	clean FORCE

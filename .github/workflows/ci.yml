@@ -53,6 +53,16 @@ jobs:
       - name: Build
         run: make
 
+      - name: Unit tests
+        run: make check
+
+      - name: Unit tests with sanitizers
+        run: |
+          # ASan fails with the high mmap randomization of newer runner kernels.
+          sudo sysctl -w vm.mmap_rnd_bits=28
+          make clean
+          make check SANITIZE=address,undefined
+
       - uses: actions/setup-python@v5
         if: matrix.style
         with:
@@ -116,8 +126,8 @@ jobs:
           ninja -C picom/build
           ninja -C picom/build install
 
-      - name: Harness
-        run: make && PICOM=/usr/local/bin/picom tests/run.sh
+      - name: Unit tests and harness
+        run: make check-all PICOM=/usr/local/bin/picom
 
       - name: Keep the harness's logs
         if: failure()

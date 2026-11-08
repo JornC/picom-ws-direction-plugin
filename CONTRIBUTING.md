@@ -36,6 +36,13 @@ first line of `WS_DIRECTION_LOG`.
 ## Make targets
 
 - `make` (or `make all`) builds the plugin `build/ws-direction.so`.
+- `make check` builds and runs the unit tests, `build/unit-tests`. It needs no X server,
+  so a package's check step can run it. `build/unit-tests WORD` runs only the tests
+  whose name has WORD in it.
+- `make check-harness` builds everything and runs the harness, `tests/run.sh`. The
+  harness's variables (`PICOM`, `WSDIR_DISPLAY` and the others below) reach it from
+  make's command line or the environment.
+- `make check-all` runs both.
 - `make lint` runs shellcheck on `tests/*.sh` and `docs/*.sh`.
 - `make format` formats the C files with clang-format; `make format-check` only checks.
 - `make install` and `make uninstall`, see the README.
@@ -56,6 +63,25 @@ Variables:
 
 ## Tests
 
+### Unit tests
+
+`tests/unit` has 56 tests of the logic that works on the plugin's state: which monitor a
+workspace is on, the order of a monitor's workspaces, the steps of a switch, which
+workspace each monitor shows, which switch each show and hide is part of, and the
+variables, through `ws_compute`. They run in about 10 ms, without an X server. They link
+`desktop.o` and `passes.o`; `tests/unit/fixture.c` stands in for `plugin.c` (the state, a
+log into a buffer and a fake clock), gives a picom API that records the animations
+started, and sets up what a window manager would: the workspaces, the current desktop
+and the managed windows, as a read finds them.
+
+`tests/unit/test.h` is the runner, about 100 lines. Write a test as `TEST(name) { ... }`
+in any `tests/unit/*.c`; the runner finds it. `CHECK`, `CHECK_INT`, `CHECK_STR` and
+`CHECK_HAS` end the test when they fail. CI runs them with gcc and clang, with
+`-Werror`, and with ASan and UBSan.
+
+Without X the unit tests can't reach `desktop.c`'s reading of the X server's replies, or
+`plugin.c`'s frame callback and constructor. The harness covers those.
+
 ### The harness
 
 `tests/run.sh` starts a nested Xvfb with two monitors (a landscape 3440x1440 and a
@@ -75,7 +101,7 @@ make and pkg-config. And a picom with the plugin API the plugin needs: the fork'
     make
     PICOM=/path/to/picom/build/src/picom tests/run.sh
 
-Environment:
+or `make check-harness PICOM=...`. Environment:
 
 - `PICOM`: the picom binary, default picom on the PATH.
 - `I3`: default `/usr/bin/i3`.
@@ -129,8 +155,8 @@ fonts.
 - Never rewrite history: no amend, rebase, squash or force-push, also not for a commit
   that is not pushed yet. Fix a mistake in a new commit on top.
 - One topic per commit. The subject says what changes, in plain words; the body says why.
-- Before a commit, run `make format-check` and `make lint`. Run the harness for a change
-  to what the plugin does or to a style.
+- Before a commit, run `make format-check`, `make lint` and `make check`. Run the
+  harness for a change to what the plugin does or to a style.
 
 ## A new picom plugin API version
 
