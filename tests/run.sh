@@ -25,31 +25,32 @@
 # Phase 1 also starts a custom animation trigger over picom's D-Bus interface
 # (StartAnimations) on an xterm of a hidden workspace, and checks a screenshot shows it
 # while the animation runs, and that started right after a switch on the xterms of the
-# workspaces in between, it is still part of no switch: the plugin didn't start it. Then
-# it runs picom with styles/pass-slide.conf, slowed down, and checks that the plugin
-# itself starts the custom trigger ws-pass on all xterms of the switch's monitor, in the
-# pass of the switch, and that none of them starts a show or hide on top. Screenshots
-# partway through switches show the xterms of the workspaces passed on the monitor, in
-# order, but not an xterm whose place is still on the other monitor (placed 0), and that a
-# switch made while one runs carries the workspaces on as one strip. With styles/wall.conf
-# next to pass-slide, "ws-direction overview" opens and closes the overview, a switch
-# while it is open moves the bright tile, and a click on a window picks it ("open --wait"
-# returns 0), while a click on no window does nothing ("open --wait" returns 1 on close).
-# Two toggles at once are both done, --output and --all open the monitors they name, and
+# workspaces in between, it is still part of no switch: the plugin didn't start it.
+# Then it runs picom with
+# styles/pass-slide.conf, slowed down, and checks that the plugin itself starts the custom
+# trigger ws-pass on all xterms of the switch's monitor, in the pass of the switch, and
+# that none of them starts a show or hide on top. Screenshots partway through switches
+# show the xterms of the workspaces passed on the monitor, in order, but not an xterm
+# whose place is still on the other monitor (placed 0), and that a switch made while one
+# runs carries the workspaces on as one strip. With styles/wall.conf next to pass-slide,
+# "ws-direction overview" opens and closes the overview, a switch while it is open moves
+# the bright tile, and a click on a window picks it ("open --wait" returns 0), while a
+# click on no window does nothing ("open --wait" returns 1 on close). Two toggles at
+# once are both done, --output and --all open the monitors they name, and
 # "open --wait --buttons" returns for the other buttons, and with var-darken 1 the tiles
 # not shown are darkened rather than see-through. With styles/cube.conf and
 # styles/flip.conf, slowed down, a screenshot partway through a switch shows the
 # workspaces in perspective, on their monitor, and not the back of the flip's card, and
 # check-frames.py checks every frame of those switches in picom's frame timing log, also
-# with the eye at a distance in millimetres (var-eye-mm). With styles/unfold.conf next to
-# cube, the overview opens the box into a flat strip and closes it again, and check-
-# frames.py checks those frames too. Then every style runs as it ships, at its own length,
-# through switches that interrupt each other the same way and the other way, on both
-# monitors (and with wall and unfold the overview opened halfway into a switch), and
-# check-frames.py checks every frame. Last it restarts i3 and changes picom's config,
-# which leave picom without images of the hidden workspaces, and checks that the plugin
-# gets them back by itself, with the screen, the keyboard and the pointer frozen, that it
-# puts the pointer back, and that it waits for a window that paints itself late
+# with the eye at a distance in millimetres (var-eye-mm). With styles/unfold.conf next
+# to cube, the overview opens the box into a flat strip and closes it again, and
+# check-frames.py checks those frames too. Then every style runs as it ships, at its own
+# length, through switches that interrupt each other the same way and the other way, on
+# both monitors (and with wall and unfold the overview opened halfway into a switch),
+# and check-frames.py checks every frame. Last it restarts i3 and changes picom's
+# config, which leave picom without images of the hidden workspaces, and checks that the
+# plugin gets them back by itself, with the screen, the keyboard and the pointer frozen,
+# that it puts the pointer back, and that it waits for a window that paints itself late
 # (tests/slowpaint.c). And that "ws-direction warm" gets them back when asked, also at
 # picom's start, and "warm --auto off" stops the plugin from doing it by itself.
 # The harness runs on a D-Bus session bus of its own.

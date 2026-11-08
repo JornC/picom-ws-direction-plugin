@@ -54,6 +54,8 @@ Styles:
   sits, from the monitor's size in millimetres.
 - `var-darken` in `parts/overview.conf` darkens the workspaces the overview doesn't show.
 - The shipped styles draw the plugin's backdrops.
+- The themed switch styles ink, paper, pop and twirl, which go with win-cause's styles of
+  the same name.
 
 Switch passes:
 

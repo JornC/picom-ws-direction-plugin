@@ -92,9 +92,13 @@ and constructor, or `cmd.c`. The harness covers those.
 portrait 1080x1920), runs i3 and then a tiny fake window manager (`tests/fakewm.c`) on
 it, and picom with the plugin and the styles. It checks the variables the plugin logs
 for every window that shows, opens or hides, takes screenshots partway through slowed
-down switches, and checks the cases the units so far added, and `make install` and
-`make uninstall`. Its header lists every case. It prints PASS or FAIL per case, and
-exits 1 if one failed.
+down switches, checks every frame of every style with `tests/check-frames.py` (cube,
+flip and unfold also slowed down, and all of them at their own length through
+switches that interrupt each other), and checks the overview, the clicks, getting
+images back (with `tests/slowpaint.c`, a window that paints itself late), and
+`make install` and `make uninstall`. Its header lists every case. It
+prints PASS or FAIL per case, about 170 of them, and exits 1 if one failed. It takes
+about 10 minutes.
 
 It needs Xvfb with GLX (Mesa), xrandr, i3 and i3-msg, xterm, xdotool, xprop,
 ImageMagick 7 (`import` and `magick`), dbus-run-session and dbus-send, jq, Python 3, a C

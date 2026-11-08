@@ -7,13 +7,13 @@ tells them where a window's workspace is among the monitor's workspaces, for eff
 that draw the workspaces a switch passes, like a box of workspaces that turns. picom
 itself knows nothing about workspaces: the plugin reads the window manager's EWMH
 properties and hands the scripts sixteen numbers. What the scripts do with them is up
-to you; `styles/` has twelve switch styles and two overviews to start from, and the
+to you; `styles/` has sixteen switch styles and two overviews to start from, and the
 `ws-direction` command opens and closes the overview.
 
 ![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
 horizontal on the portrait one](docs/slide.gif)
 
-![All seven styles at once, going through the same workspace switches](docs/styles.gif)
+![Eight of the styles at once, going through the same workspace switches](docs/styles.gif)
 
 The GIFs are recorded on Xvfb with i3 and picom's xrender backend, at a quarter of a
 3440x1440 + 1080x1920 layout, with the windows cropped below the i3 bar, and cascade with
@@ -159,10 +159,25 @@ part, for a slower switch. What a family of styles shares is in one file in
 - **flip**: the workspace turns over like a card, in perspective, with the new one on its
   back; a switch that passes workspaces flips past them. Like cube, it is best with glx
   or egl.
+- **paper**: the workspace slides away like a sheet of paper on a desk, leaning into the
+  way it goes, and the new one slides in behind it from the side the switch comes from.
+  Needs the corner outputs, as cube does.
+- **pop**: the windows of the old workspace shrink into their middles and fade, and those
+  of the new one pop out of theirs. Needs the fork's `window-image-width` and
+  `window-image-height`.
+- **twirl**: pop with a quarter turn in the plane of the screen. Needs the corner outputs,
+  and `window-image-width` and `window-image-height`.
+- **ink**: the windows of the old workspace turn into blocks of their own mean colour as
+  their pictures drain into their middles, and the blocks fade; those of the new one come
+  as blocks, and their content comes out of the middle. Needs the fork's window animation
+  outputs: `fill`, the mean colour (`window-mean-*`), `frame-on-crop`, and
+  `window-image-width` and `window-image-height`.
 - **wall**: not a switch style, but an overview. A key unfolds the monitor's workspaces
   into a strip of tiles that fits on the monitor, see [Overview styles](#overview-styles).
 - **unfold**: the overview for cube. A key opens the box of workspaces up into a flat
   strip that fits on the monitor; like cube, it is best with glx or egl.
+
+paper, pop, twirl and ink go with win-cause's styles of the same name.
 
 Every switch style moves all workspaces of the monitor in a switch, through `ws-pass`: a
 switch that passes workspaces shows them on the way (going from 1 to 4, the windows of 2
