@@ -45,20 +45,18 @@
 /// come from RandR, a window's place from GetGeometry and TranslateCoordinates.
 ///
 /// The order in which a window manager changes these properties and maps and unmaps
-/// windows is not specified, and those changes can reach picom over several frames. So
-/// the variables don't depend on that order. We remember, per monitor, the workspaces it
-/// showed recently, and when we last saw a part of each switch between them. picom calls
-/// us at the start of every pass (a frame callback). When the root window's workspace
-/// properties changed, we read them again there. The first animation start in a pass
-/// reads them too, unless the frame callback just did. When a window starts a show, open
-/// or hide animation, we look for a recent switch to (or away from) its workspace on its
-/// monitor. A window that shows on a workspace we didn't think was visible also counts as
-/// a switch, because some window managers map the new windows before they update the root
-/// properties. We start ws-pass for such a switch in the next pass.
+/// windows is not specified, and those changes can reach picom over several frames. So we
+/// take them in the order the X server made them: our own connection gets the root
+/// window's property changes and every map, unmap and change of a top-level window
+/// (SubstructureNotify), and each one but a move or a restack makes the frame callback
+/// read the root window and the managed windows again, before picom asks. passes.c finds
+/// the switches on every monitor from that, and which switch each show and hide is part
+/// of. picom calls us at the start of every pass (a frame callback), and we start ws-pass
+/// there for a new switch. The first animation start in a pass reads too, unless the
+/// frame callback just did, or the window closes.
 ///
 /// picom runs passes also while it doesn't composite (see unredir-if-possible), so we see
 /// those switches too, but picom doesn't draw their animations.
-///
 ///
 /// We connect to the display named by DISPLAY, like picom itself. The variables are only
 /// added once the X connection is up. Without it, every animation whose script reads
@@ -156,69 +154,105 @@ static double ws_provide(const struct picom_animation_start *start, void *user_d
 	return last.values[(uintptr_t)user_data];
 }
 
-/// picom calls this at the start of every pass, before it starts animations. When the
-/// root window's workspace properties changed, read them again, and start ws-pass for a
-/// new switch.
-static void ws_frame(uint64_t frame, [[maybe_unused]] void *user_data) {
-	wsd.frame = frame;
-	wsd.frame_time_us = ws_now_us();
+/// Whether xcb has an event of ours in its queue, which it read while we waited for a
+/// reply, or we took one that the next read must take in. picom asks before it sleeps,
+/// see add_wakeup_fd.
+static bool ws_pending([[maybe_unused]] void *user_data) {
+	if (wsd.queued == NULL) {
+		wsd.queued = xcb_poll_for_queued_event(wsd.c);
+	}
+	return wsd.queued != NULL || wsd.read.needed;
+}
 
-	// Take all events, so they don't pile up in the connection's queue. Only the root
-	// window's property changes are selected; the server also sends every client a
-	// few, like MappingNotify.
-	bool root_changed = false;
+static xcb_generic_event_t *ws_next_event(void) {
+	auto event = wsd.queued;
+	wsd.queued = NULL;
+	return event != NULL ? event : xcb_poll_for_event(wsd.c);
+}
+
+static void ws_add_event(enum ws_event_type type, xcb_window_t window, uint32_t sequence) {
+	wsd.events = ws_grow(wsd.events, wsd.n_events + 1, sizeof(*wsd.events));
+	wsd.events[wsd.n_events++] = (struct ws_event){type, window, sequence};
+}
+
+/// Take all events, so they don't pile up in the connection's queue: the root window's
+/// property changes, and the maps, unmaps and changes of top-level windows. The server
+/// also sends every client a few, like MappingNotify. Sets wsd.read.needed for a change
+/// that the next read must take in.
+void ws_take_events(void) {
 	xcb_generic_event_t *event;
-	while ((event = xcb_poll_for_event(wsd.c)) != NULL) {
-		if ((event->response_type & 0x7f) == XCB_PROPERTY_NOTIFY) {
+	while ((event = ws_next_event()) != NULL) {
+		auto type = event->response_type & 0x7f;
+		auto sequence = event->full_sequence;
+		switch (type) {
+		case XCB_PROPERTY_NOTIFY: {
 			auto e = (xcb_property_notify_event_t *)event;
-			root_changed |= e->atom == wsd.a_current_desktop ||
-			                e->atom == wsd.a_desktop_names ||
-			                e->atom == wsd.a_desktop_viewport;
+			if (e->atom == wsd.a_current_desktop) {
+				ws_add_event(WS_EVENT_CURRENT, XCB_NONE, sequence);
+			}
+			bool root = e->atom == wsd.a_current_desktop ||
+			            e->atom == wsd.a_desktop_names ||
+			            e->atom == wsd.a_desktop_viewport ||
+			            e->atom == wsd.a_client_list;
+			wsd.read.needed |= root;
+			break;
+		}
+		case XCB_MAP_NOTIFY:
+			ws_add_event(WS_EVENT_MAP,
+			             ((xcb_map_notify_event_t *)event)->window, sequence);
+			wsd.read.needed = true;
+			break;
+		case XCB_UNMAP_NOTIFY:
+			ws_add_event(WS_EVENT_UNMAP,
+			             ((xcb_unmap_notify_event_t *)event)->window, sequence);
+			wsd.read.needed = true;
+			break;
+		case XCB_DESTROY_NOTIFY:
+		case XCB_REPARENT_NOTIFY: wsd.read.needed = true; break;
+		case XCB_CONFIGURE_NOTIFY:
+		case XCB_GRAVITY_NOTIFY:
+		case XCB_CIRCULATE_NOTIFY:
+			// A move or a restack changes no workspace, and a start reads for
+			// itself.
+			break;
+		default: break;
 		}
 		free(event);
 	}
+}
 
-	// A provider can record a switch too, after the callback of its pass. Its windows
-	// are started in the next pass.
-	bool unstarted = false;
-	for (unsigned i = 0; i < wsd.n_tracked; i++) {
-		unstarted |= ws_unstarted_switch(&wsd.tracked[i]) > 0;
-	}
-	if (root_changed || unstarted) {
-		if (wsd.read.step == WS_READ_IDLE) {
-			ws_read_start();
-		} else if (root_changed) {
-			wsd.read.again = true;
-		}
+/// picom calls this at the start of every pass, before it starts animations. When the
+/// root window or a top-level window changed, read them again, record the switches, and
+/// start ws-pass for a new one.
+static void ws_frame(uint64_t frame, [[maybe_unused]] void *user_data) {
+	wsd.frame = frame;
+	wsd.frame_time_us = ws_now_us();
+	ws_take_events();
+
+	if (wsd.read.needed && wsd.read.step == WS_READ_IDLE) {
+		wsd.read.needed = false;
+		ws_read_start();
 	}
 	if (wsd.read.step != WS_READ_IDLE) {
-		do {
-			// Only the pass that starts a read waits; the pause
-			// brings the others.
-			auto wait = wsd.read.start_frame == wsd.frame ? WS_READ_WAIT_US : 0;
-			if (!ws_read_advance(wait)) {
-				// The X server is busy, often with the switch itself.
-				// Instead of holding up picom, pause the screen until it
-				// answers: picom draws nothing and starts no animation
-				// meanwhile, and what changed then animates once the
-				// pause ends.
-				wsd.read.paused = true;
-				wsd.api->pause_screen("plugin-ws-direction", WS_READ_TICK, 0);
-				return;
-			}
-			if (wsd.read.again) {
-				// The replies may be from before the change: start
-				// nothing from them.
-				wsd.read.again = false;
-				ws_read_start();
-			}
-		} while (wsd.read.step != WS_READ_IDLE);
+		// Only the pass that starts a read waits; the pause brings the others.
+		auto wait = wsd.read.start_frame == wsd.frame ? WS_READ_WAIT_US : 0;
+		if (!ws_read_advance(wait)) {
+			// The X server is busy, often with the switch itself. Instead of
+			// holding up picom, pause the screen until it answers: picom
+			// draws nothing and starts no animation meanwhile, and what
+			// changed then animates once the pause ends.
+			wsd.read.paused = true;
+			wsd.api->pause_screen("plugin-ws-direction", WS_READ_TICK, 0);
+			return;
+		}
 		if (wsd.read.paused) {
 			wsd.read.paused = false;
 			wsd.api->pause_screen("plugin-ws-direction", 0, 0);
 		}
-		ws_start_passes();
 	}
+	// A read that picom's provider made, after the callback of its pass, may have
+	// recorded switches too.
+	ws_start_passes();
 }
 
 __attribute__((constructor)) static void ws_init(void) {
@@ -266,20 +300,22 @@ __attribute__((constructor)) static void ws_init(void) {
 
 	// Selected before the first read, so no change after it is missed.
 	xcb_change_window_attributes(wsd.c, wsd.root, XCB_CW_EVENT_MASK,
-	                             (uint32_t[]){XCB_EVENT_MASK_PROPERTY_CHANGE});
+	                             (uint32_t[]){XCB_EVENT_MASK_PROPERTY_CHANGE |
+	                                          XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY});
 
 	// Learn what each monitor shows now, before the first switch.
 	wsd.frame_time_us = ws_now_us();
-	ws_read_root();
-	ws_seed_from_windows();
-	if (wsd.current >= 0 && wsd.current < wsd.n_names) {
-		ws_get_monitor((unsigned)wsd.current, XCB_NONE);
-	}
+	ws_read();
 
 	// Only now: a variable must never exist without the connection that gives it a
 	// value, nor without the frame callback that tells it the pass.
 	if (!api->add_frame_callback(ws_frame, NULL)) {
 		ws_fail("could not add the frame callback, "
+		        "not adding the plugin-ws-direction-* variables");
+		return;
+	}
+	if (!api->add_wakeup_fd(xcb_get_file_descriptor(wsd.c), ws_pending, NULL)) {
+		ws_fail("picom cannot watch the X connection, "
 		        "not adding the plugin-ws-direction-* variables");
 		return;
 	}

@@ -2,8 +2,9 @@
 // Copyright (c) JornC
 
 /// What the unit tests share: stand-ins for what plugin.c gives the other modules (the
-/// state, the log and the clock), a fake picom API that records the animations started,
-/// and helpers that set up monitors, workspaces and windows. Nothing here talks to an X
+/// state, the log, the clock and the starts), and helpers that set up monitors,
+/// workspaces and windows, and play what a window manager does: maps, unmaps and changes
+/// of the current desktop, as the events a read takes in. Nothing here talks to an X
 /// server: the tests call only functions that work on the state.
 
 #pragma once
@@ -18,13 +19,10 @@
 #define TOP ((struct ws_rect){.x1 = 0, .y1 = 0, .x2 = 1920, .y2 = 1080})
 #define BOTTOM ((struct ws_rect){.x1 = 0, .y1 = 1080, .x2 = 1920, .y2 = 2160})
 
-/// One pass at 60 Hz, in microseconds.
-#define FRAME_US 16667
-
 /// The last line the modules logged.
 extern char test_log[512];
 
-/// An animation the fake picom API started.
+/// An animation the plugin started.
 struct test_start {
 	uint32_t window;
 	const char *trigger;
@@ -39,22 +37,38 @@ struct fx_values {
 
 /// Forget everything: no monitors, workspaces or windows, a screen of 4520x1920.
 void fx_reset(void);
-/// Add a monitor. Returns its index.
+/// Add a monitor. Its RandR name is its index plus 1. Returns its index.
 int fx_monitor(struct ws_rect r);
 /// Add a workspace on monitor `monitor`, with the monitor's corner as its viewport.
 /// Returns its desktop.
 unsigned fx_workspace(const char *name, int monitor);
-/// Add a window the window manager manages, on desktop `desktop` (-1 for none), at `r`.
+/// Add a window the window manager manages, on desktop `desktop` (-1 for none), at `r`,
+/// not viewable.
 struct ws_client *fx_window(xcb_window_t id, int64_t desktop, struct ws_rect r);
 /// Add a window on desktop `desktop`, in the middle of the monitor of the desktop.
 struct ws_client *fx_window_on(xcb_window_t id, unsigned desktop);
-/// The root window says the current desktop is now `desktop`.
+/// The window `id` of the windows the window manager manages.
+struct ws_client *fx_client(xcb_window_t id);
+/// The window manager maps or unmaps window `id`.
+void fx_map(xcb_window_t id);
+void fx_unmap(xcb_window_t id);
+/// The window manager sets _NET_CURRENT_DESKTOP to `desktop`.
+void fx_current(unsigned desktop);
+/// Read the root window and the windows, and take the events since the last read.
+void fx_read(void);
+/// The first read, with desktops `shown` on screen (their windows viewable), and
+/// `current` the current desktop.
+void fx_start(const unsigned *shown, unsigned n_shown, unsigned current);
+/// A switch to `desktop` as i3 makes it: the current desktop, then it maps the windows
+/// of `desktop` and unmaps the other viewable windows of that monitor. No read.
+void fx_switch_events(unsigned desktop);
+/// fx_switch_events, then a read.
 void fx_switch(unsigned desktop);
-/// Start the next pass, `us` microseconds after the last one.
-void fx_pass(uint64_t us);
-/// The order of desktop `desktop`.
-struct ws_order fx_order(unsigned desktop);
+/// Start the next pass.
+void fx_pass(void);
 /// What we know about the monitor of desktop `desktop`.
 struct ws_monitor *fx_tracked(unsigned desktop);
+/// The id of the latest switch on the monitor of desktop `desktop`, 0 if none.
+uint64_t fx_last_switch(unsigned desktop);
 /// Work out the variables of window `id` for an animation of `trigger`, in this pass.
 struct fx_values fx_compute(xcb_window_t id, const char *trigger);

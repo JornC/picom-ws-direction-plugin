@@ -7,34 +7,41 @@
 #include "fixture.h"
 
 /// Two monitors: 1 to 4 on the landscape one, 5 and 6 on the portrait one, each with one
-/// window, 0x101 to 0x106.
+/// window, 0x101 to 0x106. The landscape one shows 1, the portrait one 5.
 static void two_monitors(void) {
 	fx_reset();
 	int left = fx_monitor(LANDSCAPE), right = fx_monitor(PORTRAIT);
 	const char *names[] = {"1", "2", "3", "4", "5", "6"};
 	for (unsigned d = 0; d < 6; d++) {
 		fx_workspace(names[d], d < 4 ? left : right);
+	}
+	for (unsigned d = 0; d < 6; d++) {
 		fx_window_on(0x101 + d, d);
 	}
+	fx_start((unsigned[]){0, 4}, 2, 0);
 }
 
-/// One monitor with workspaces 1 to 5, each with one window, 0x101 to 0x105.
-static void one_monitor(void) {
+/// One monitor with workspaces 1 to 5, each with one window, 0x101 to 0x105, showing
+/// `shown`. The viewports are all the same, so the monitor is the whole screen.
+static void one_monitor(unsigned shown) {
 	fx_reset();
 	auto m = fx_monitor(LANDSCAPE);
 	const char *names[] = {"1", "2", "3", "4", "5"};
 	for (unsigned d = 0; d < 5; d++) {
 		fx_workspace(names[d], m);
+	}
+	for (unsigned d = 0; d < 5; d++) {
 		fx_window_on(0x101 + d, d);
 	}
+	fx_start((unsigned[]){shown}, 1, shown);
 }
 
-/// The switch from 1 to 3 on the landscape monitor.
+/// The switch from 1 to 3 on the landscape monitor, and ws-pass started for it.
 static void switch_1_to_3(void) {
 	two_monitors();
-	fx_switch(0);
-	fx_pass(FRAME_US);
+	fx_pass();
 	fx_switch(2);
+	ws_start_passes();
 }
 
 TEST(variables_show_in_a_switch) {
@@ -76,7 +83,7 @@ TEST(variables_ws_pass_on_every_workspace_of_the_monitor) {
 	auto beyond = fx_compute(0x104, "ws-pass");
 	CHECK_INT(beyond.direction, 1);
 	CHECK_INT(beyond.face, 3);
-	// The other monitor has no switch.
+	// The other monitor has no switch, and the plugin started nothing there.
 	auto other = fx_compute(0x105, "ws-pass");
 	CHECK_INT(other.direction, 0);
 	CHECK_INT(other.x, 3440);
@@ -87,10 +94,26 @@ TEST(variables_ws_pass_on_every_workspace_of_the_monitor) {
 	CHECK_INT(other.selected, 0);
 }
 
+TEST(variables_ws_pass_only_in_its_pass) {
+	// Why the plugin started an animation holds for the pass it started it in.
+	switch_1_to_3();
+	fx_pass();
+	CHECK_INT(fx_compute(0x102, "ws-pass").direction, 0);
+}
+
+TEST(variables_custom_trigger_not_started_by_the_plugin) {
+	// Started over D-Bus right after a switch: not part of it.
+	switch_1_to_3();
+	auto v = fx_compute(0x102, "wave");
+	CHECK_INT(v.direction, 0);
+	CHECK_INT(v.distance, 0);
+	CHECK_INT(v.face, -1);
+}
+
 TEST(variables_switch_back) {
 	two_monitors();
 	fx_switch(2);
-	fx_pass(FRAME_US);
+	fx_pass();
 	fx_switch(0);
 	auto show = fx_compute(0x101, "show");
 	CHECK_INT(show.direction, -1);
@@ -101,15 +124,29 @@ TEST(variables_switch_back) {
 	CHECK_INT(hide.face, 0);
 }
 
-TEST(variables_no_switch_after_its_lifetime) {
+TEST(variables_late_show_is_part_of_its_switch) {
 	two_monitors();
-	fx_switch(0);
-	fx_pass(FRAME_US);
-	fx_switch(1);
-	fx_pass(50000);
-	fx_pass(50000);
-	fx_pass(50000);
+	fx_current(1);
+	fx_read();
+	for (unsigned i = 0; i < 100; i++) {
+		fx_pass();
+	}
+	fx_map(0x102);
+	fx_read();
 	auto v = fx_compute(0x102, "show");
+	CHECK_INT(v.direction, 1);
+	CHECK_INT(v.distance, 1);
+	CHECK_INT(v.face, 1);
+}
+
+TEST(variables_new_window_right_after_a_switch) {
+	two_monitors();
+	fx_switch(1);
+	fx_pass();
+	fx_window_on(0x200, 1);
+	fx_map(0x200);
+	fx_read();
+	auto v = fx_compute(0x200, "open");
 	CHECK_INT(v.direction, 0);
 	CHECK_INT(v.distance, 0);
 	CHECK_INT(v.face, 0);
@@ -162,7 +199,6 @@ TEST(variables_window_not_on_its_monitor) {
 	// A window moved to workspace 6 while it was hidden keeps its place on the other
 	// monitor until 6 shows.
 	two_monitors();
-	fx_switch(0);
 	fx_window(0x200, 5, (struct ws_rect){.x1 = 100, .y1 = 600, .x2 = 300, .y2 = 700});
 	auto v = fx_compute(0x200, "size");
 	CHECK_INT(v.placed, 0);
@@ -171,47 +207,52 @@ TEST(variables_window_not_on_its_monitor) {
 
 TEST(variables_window_shows_before_the_root_window_says) {
 	two_monitors();
-	fx_switch(0);
-	fx_pass(FRAME_US);
+	fx_pass();
+	fx_map(0x102);
+	fx_read();
 	auto show = fx_compute(0x102, "show");
 	CHECK_INT(show.direction, 1);
 	CHECK_INT(show.distance, 1);
 	CHECK_INT(show.face, 1);
-	auto m = fx_tracked(0);
-	CHECK_INT(m->n_visits, 2);
-	CHECK(!m->visits[1].from_root);
-	CHECK_HAS(test_log, "\"1\" -> \"2\", direction 1, distance 1");
-	CHECK_HAS(test_log, "(from window 0x00000102");
-	// Then the root window says so too: the same switch.
-	fx_switch(1);
-	CHECK_INT(m->n_visits, 2);
-	CHECK_INT(ws_unstarted_switch(m), 1);
+	// Then the root window says so too, and the old window hides: the same switch.
+	fx_current(1);
+	fx_unmap(0x101);
+	fx_read();
+	CHECK_INT(fx_tracked(0)->n_switches, 1);
 	CHECK_INT(fx_compute(0x101, "hide").direction, 1);
 }
 
-TEST(variables_root_window_skipped_a_switch) {
-	// Switching fast, from 1 to 2 to 3: we read the root window after both.
-	switch_1_to_3();
-	auto two = fx_compute(0x102, "show");
-	auto m = fx_tracked(0);
-	CHECK_INT(m->n_visits, 3);
-	CHECK_STR(m->visits[1].name, "2");
-	CHECK_INT(two.direction, 1);
-	CHECK_INT(two.distance, 1);
-	CHECK_INT(two.face, 1);
-	auto three = fx_compute(0x103, "show");
-	CHECK_INT(three.direction, 1);
-	CHECK_INT(three.distance, 1);
-	CHECK_INT(three.face, 1);
+TEST(variables_fast_switches_with_one_read) {
+	// 1 to 2 to 3, read after both: the windows of 2 showed and hid in between.
+	two_monitors();
+	fx_switch_events(1);
+	fx_switch_events(2);
+	fx_read();
+	auto show2 = fx_compute(0x102, "show");
+	CHECK_INT(show2.direction, 1);
+	CHECK_INT(show2.distance, 1);
+	CHECK_INT(show2.face, 1);
+	auto hide2 = fx_compute(0x102, "hide");
+	CHECK_INT(hide2.direction, 1);
+	CHECK_INT(hide2.distance, 1);
+	CHECK_INT(hide2.face, 0);
+	auto show3 = fx_compute(0x103, "show");
+	CHECK_INT(show3.direction, 1);
+	CHECK_INT(show3.distance, 1);
+	CHECK_INT(show3.face, 1);
+	// ws-pass goes from 1 to 3 at once.
+	ws_start_passes();
+	auto pass = fx_compute(0x103, "ws-pass");
+	CHECK_INT(pass.direction, 1);
+	CHECK_INT(pass.distance, 2);
+	CHECK_INT(pass.face, 2);
 }
 
 TEST(variables_many_switches_in_a_row) {
-	// 1 to 2 to 3 to 4, a pass apart. The windows show and hide late, and each one
-	// gets the switch it is part of.
+	// 1 to 2 to 3 to 4, a read apart. Each window gets the switch it is part of.
 	two_monitors();
-	fx_switch(0);
 	for (unsigned d = 1; d < 4; d++) {
-		fx_pass(FRAME_US);
+		fx_pass();
 		fx_switch(d);
 	}
 	auto hide1 = fx_compute(0x101, "hide");
@@ -236,10 +277,12 @@ TEST(variables_stacked_monitors) {
 	const char *names[] = {"1", "2", "3", "4", "5"};
 	for (unsigned d = 0; d < 5; d++) {
 		fx_workspace(names[d], d < 2 ? top : bottom);
+	}
+	for (unsigned d = 0; d < 5; d++) {
 		fx_window_on(0x101 + d, d);
 	}
-	fx_switch(2);
-	fx_pass(FRAME_US);
+	fx_start((unsigned[]){0, 2}, 2, 2);
+	fx_pass();
 	fx_switch(4);
 	auto v = fx_compute(0x105, "show");
 	CHECK_INT(v.direction, 1);
@@ -258,9 +301,8 @@ TEST(variables_stacked_monitors) {
 }
 
 TEST(variables_one_monitor_wrap_around) {
-	one_monitor();
-	fx_switch(4);
-	fx_pass(FRAME_US);
+	one_monitor(4);
+	fx_pass();
 	fx_switch(0);
 	auto show = fx_compute(0x101, "show");
 	CHECK_INT(show.direction, -1);
@@ -272,12 +314,10 @@ TEST(variables_one_monitor_wrap_around) {
 	CHECK_INT(hide.face, 0);
 }
 
-TEST(variables_without_viewports) {
-	// A window manager that sets no _NET_DESKTOP_VIEWPORT: one monitor, the screen.
-	one_monitor();
-	wsd.n_viewports = 0;
-	fx_switch(0);
-	fx_pass(FRAME_US);
+TEST(variables_equal_viewports_are_the_whole_screen) {
+	// Every viewport is 0,480: they don't say which monitor a desktop is on, so each
+	// one spans the whole screen.
+	one_monitor(0);
 	fx_switch(2);
 	auto v = fx_compute(0x103, "show");
 	CHECK_INT(v.direction, 1);
@@ -290,4 +330,27 @@ TEST(variables_without_viewports) {
 	CHECK_INT(v.face, 2);
 	CHECK_INT(v.selected, 1);
 	CHECK_INT(v.placed, 1);
+}
+
+TEST(variables_without_viewports) {
+	// A window manager that sets no _NET_DESKTOP_VIEWPORT: one monitor, the screen.
+	fx_reset();
+	auto m = fx_monitor(LANDSCAPE);
+	const char *names[] = {"1", "2", "3"};
+	for (unsigned d = 0; d < 3; d++) {
+		fx_workspace(names[d], m);
+	}
+	for (unsigned d = 0; d < 3; d++) {
+		fx_window_on(0x101 + d, d);
+	}
+	wsd.n_viewports = 0;
+	ws_update_viewport_monitors();
+	fx_start((unsigned[]){0}, 1, 0);
+	fx_switch(2);
+	auto v = fx_compute(0x103, "show");
+	CHECK_INT(v.direction, 1);
+	CHECK_INT(v.distance, 2);
+	CHECK_INT(v.x, 0);
+	CHECK_INT(v.width, 4520);
+	CHECK_INT(v.faces, 3);
 }

@@ -19,7 +19,7 @@
 #include <xcb/xcb.h>
 
 /// The plugin API the plugin needs is 0.WS_API_MINOR, as the picom fork numbers it.
-#define WS_API_MINOR 5
+#define WS_API_MINOR 7
 #define WS_STR(x) #x
 #define WS_XSTR(x) WS_STR(x)
 #define WS_API_VERSION "0." WS_XSTR(WS_API_MINOR)
@@ -50,51 +50,21 @@ enum ws_variable {
 	WS_N_VARIABLES,
 };
 
-/// How many workspaces we remember per monitor. When switching fast (e.g. scrolling on a
+/// How many switches we remember per monitor. When switching fast (e.g. scrolling on a
 /// bar), the windows of a switch can still be showing and hiding while the next switches
 /// are already done.
 #define WS_HISTORY 8
 #define WS_MAX_MONITORS 16
 #define WS_MAX_DESKTOPS 256
 
-/// Where a workspace sorts. Workspaces whose name starts with a number sort by that
-/// number. The others sort after those, by their position in _NET_DESKTOP_NAMES.
-struct ws_order {
-	bool numbered;
-	uint64_t number;
-	unsigned position;
-};
-
-/// A workspace that a monitor showed.
-struct ws_visit {
-	char *name;
-	struct ws_order order;
-	/// When we last saw a part of the switch to this workspace, 0 if we don't know
-	/// what the monitor showed before it.
-	uint64_t time_us;
-	/// The frame in which we last saw a part of the switch to this workspace.
-	uint64_t frame;
-	/// Whether the root window told us about this switch, rather than a window that
-	/// showed.
-	bool from_root;
-	/// Whether we started ws-pass for this switch.
-	bool passes_started;
-};
-
-/// What we know about one monitor.
-struct ws_monitor {
-	/// Viewport of the workspace shown on this monitor. We match entries to monitors
-	/// through this, so they stay valid when the monitor list changes.
-	bool has_viewport;
-	int32_t viewport_x, viewport_y;
-	/// The workspaces this monitor showed, oldest first. The last one is shown now.
-	/// Each one after the first is a switch from the one before it.
-	struct ws_visit visits[WS_HISTORY];
-	unsigned n_visits;
-};
-
 struct ws_rect {
 	int32_t x1, y1, x2, y2;
+};
+
+/// A monitor, as RandR gives it.
+struct ws_output {
+	xcb_atom_t name;
+	struct ws_rect rect;
 };
 
 /// A workspace switch as a window sees it: which way it went, and how many workspaces of
@@ -104,30 +74,92 @@ struct ws_move {
 	unsigned distance;
 };
 
-/// A window the window manager manages.
+/// A workspace switch on a monitor.
+struct ws_switch {
+	/// Counts the switches, from 1. 0 stands for no switch.
+	uint64_t id;
+	char *from, *to;
+	/// The monitor's workspaces in order, as of the switch: those of the read in
+	/// which we saw it, and those of the read before that are gone since, after the
+	/// one they came after. So a workspace that the window manager removed with the
+	/// switch still counts.
+	char **list;
+	unsigned n_list;
+	struct ws_move move;
+	/// Whether we started ws-pass for it, or for a later one that includes it.
+	bool passes_started;
+	/// Whether a show or hide was part of it. A switch that comes before the one
+	/// before had any goes on from it: `start` is the first switch of such a chain,
+	/// which the window manager makes as one move.
+	bool realized;
+	uint64_t start;
+};
+
+/// What we know about one monitor.
+struct ws_monitor {
+	/// Its RandR name, XCB_NONE for the whole screen.
+	xcb_atom_t name;
+	/// The workspace it shows, NULL until we know.
+	char *shown;
+	/// Its workspaces in order, as of the last read.
+	char **list;
+	unsigned n_list;
+	/// Its switches, oldest first.
+	struct ws_switch switches[WS_HISTORY];
+	unsigned n_switches;
+};
+
+/// A window the window manager manages, as the last read saw it.
 struct ws_client {
 	xcb_window_t id;
+	/// Its top-level window: the frame the window manager put it in, or itself.
+	xcb_window_t frame;
 	/// Its desktop, -1 if it is not on one workspace.
 	int64_t desktop;
 	/// Where it is, in root coordinates.
 	struct ws_rect rect;
 	/// The name of its workspace, NULL if it is not on one.
 	char *workspace;
-	/// Whether it moved from another workspace since the read before.
-	bool moved;
+	/// Whether it is viewable: it and its frame are mapped.
+	bool viewable;
+	/// The switch that its next show or hide is part of, and the switch that its last
+	/// show and its last hide were part of. 0 for none.
+	uint64_t pending_show, pending_hide, last_show, last_hide;
+	/// The last switch to its workspace that it was viewable at: it moved along.
+	uint64_t along;
 };
 
-/// The requests for the root window properties, the screen size and the monitors, sent
-/// together so they take one round trip. Pair ws_read_root_request with
-/// ws_read_root_reply.
+/// Why the plugin started an animation on a window in this pass: the trigger, the
+/// monitor, and the switches it is for, from `first` to `last` (0 for none).
+struct ws_start {
+	xcb_window_t window;
+	const char *trigger;
+	xcb_atom_t monitor;
+	uint64_t first, last;
+};
+
+/// A map or unmap of a top-level window, or a change of _NET_CURRENT_DESKTOP, that our
+/// connection got. `sequence` orders it against our requests: the X server made it after
+/// our request of that number, and before the next one.
+enum ws_event_type { WS_EVENT_MAP, WS_EVENT_UNMAP, WS_EVENT_CURRENT };
+struct ws_event {
+	enum ws_event_type type;
+	xcb_window_t window;
+	uint32_t sequence;
+};
+
+/// The requests of the first round trip of a read: the root window properties, the
+/// screen size, the monitors, the top-level windows and the window list.
 struct ws_root_requests {
-	xcb_get_property_cookie_t current, viewports, names;
+	xcb_get_property_cookie_t viewports, names, list;
 	xcb_get_geometry_cookie_t screen;
 	xcb_randr_get_monitors_cookie_t monitors;
+	xcb_query_tree_cookie_t tree;
 };
 
 /// Where a read of the root window and the managed windows is: it waits for the replies
-/// to the root window and the window list, then for those of the windows in the list.
+/// to the first round trip, then for those of the second, which asks about each window in
+/// the list, and for the desktop names and the current desktop again.
 enum ws_read_step { WS_READ_IDLE, WS_READ_ROOT, WS_READ_WINDOWS };
 
 // Defined in desktop.c, the only module that looks inside it.
@@ -153,17 +185,22 @@ struct ws_state {
 	struct {
 		enum ws_read_step step;
 		struct ws_root_requests root;
-		xcb_get_property_cookie_t list;
+		/// The replies of the first round trip that the second one needs.
+		xcb_get_property_reply_t *names;
+		xcb_window_t *toplevels;
+		unsigned n_toplevels;
 		struct ws_window_requests *windows;
 		unsigned n_windows;
+		xcb_get_property_cookie_t current, names_again;
 		/// The last request of the step: once its reply is in, all of them are.
 		xcb_get_input_focus_cookie_t sync;
 		/// When it started, and in which pass.
 		uint64_t start_us, start_frame;
 		/// Whether the screen is paused while it waits.
 		bool paused;
-		/// Whether the root window changed again while it waited.
-		bool again;
+		/// Whether the root window or a top-level window changed since the last
+		/// read.
+		bool needed;
 	} read;
 	/// How often we waited for the X server while working out the variables of one
 	/// window. For the log.
@@ -176,10 +213,14 @@ struct ws_state {
 	/// _NET_DESKTOP_VIEWPORT, as x, y pairs.
 	uint32_t viewports[WS_MAX_DESKTOPS * 2];
 	unsigned n_viewports;
+	/// Whether the viewports say which monitor each desktop is on: they differ, and
+	/// each one is the corner of a monitor. Else every desktop spans the whole
+	/// screen.
+	bool viewport_monitors;
 	/// _NET_CURRENT_DESKTOP, -1 if not set.
 	int64_t current;
 
-	struct ws_rect monitors[WS_MAX_MONITORS];
+	struct ws_output monitors[WS_MAX_MONITORS];
 	int n_monitors;
 
 	/// The windows in _NET_CLIENT_LIST. Windows whose place could not be read are
@@ -189,6 +230,19 @@ struct ws_state {
 
 	struct ws_monitor tracked[WS_MAX_MONITORS];
 	unsigned n_tracked;
+	/// The id of the last switch we recorded.
+	uint64_t last_switch;
+
+	/// The maps, unmaps and current desktop changes our connection got that the next
+	/// read takes in.
+	struct ws_event *events;
+	unsigned n_events;
+	/// The animations we started in this pass, and why.
+	struct ws_start *starts;
+	unsigned n_starts;
+	uint64_t starts_frame;
+	/// An event that ws_pending took from xcb's queue, not handled yet.
+	xcb_generic_event_t *queued;
 };
 
 extern struct ws_state wsd;
@@ -205,6 +259,7 @@ static inline void *ws_grow(void *array, size_t n, size_t size) {
 // plugin.c
 __attribute__((format(printf, 1, 2))) void ws_log(const char *fmt, ...);
 uint64_t ws_now_us(void);
+void ws_take_events(void);
 
 // desktop.c
 xcb_atom_t ws_atom(const char *name);
@@ -212,30 +267,32 @@ void *ws_reply(unsigned int sequence);
 xcb_get_property_reply_t *
 ws_get_prop(xcb_window_t w, xcb_atom_t atom, xcb_atom_t type, uint32_t max_len);
 int64_t ws_find_desktop(const char *name);
-bool ws_desktop_viewport(unsigned desktop, int32_t *x, int32_t *y);
-int ws_monitor_index(bool has_viewport, int32_t x, int32_t y);
-int ws_desktop_monitor(unsigned desktop);
 bool ws_rect_has_point(struct ws_rect r, int32_t x, int32_t y);
+void ws_update_viewport_monitors(void);
+int ws_desktop_monitor(unsigned desktop);
+int ws_monitor_of_name(xcb_atom_t name);
+struct ws_rect ws_monitor_rect(int index);
 const struct ws_client *ws_find_client(xcb_window_t id);
-bool ws_read_root_reply(struct ws_root_requests requests);
-bool ws_read_root(void);
-void ws_seed_from_windows(void);
+const struct ws_client *ws_find_client_by_frame(xcb_window_t frame);
 void ws_read_start(void);
 bool ws_read_advance(uint64_t wait_us);
 void ws_read(void);
 
 // passes.c
-struct ws_monitor *ws_find_monitor(unsigned desktop);
-struct ws_monitor *ws_get_monitor(unsigned desktop, xcb_window_t w);
-struct ws_order ws_order_of(const char *name, unsigned position);
-int ws_order_compare(struct ws_order a, struct ws_order b);
 int ws_rect_monitor(struct ws_rect r);
-bool ws_passes(struct ws_order from, struct ws_order to, int index, unsigned desktop);
-struct ws_move ws_steps(struct ws_order from, struct ws_order to, int index);
-void ws_track_switch(bool root_changed);
-void ws_refresh(struct ws_root_requests requests);
-int ws_face(unsigned desktop, int index, struct ws_monitor *m, unsigned k);
+struct ws_monitor *ws_find_monitor(int index);
+struct ws_monitor *ws_monitor_of(unsigned desktop);
+struct ws_monitor *ws_get_monitor(int index);
+void ws_free_monitor(struct ws_monitor *m);
+const struct ws_switch *ws_find_switch(const struct ws_monitor *m, uint64_t id);
+unsigned ws_monitor_list(int index, const char *list[static WS_MAX_DESKTOPS]);
+int ws_list_find(const char *const *list, unsigned n, const char *name);
+struct ws_move
+ws_steps(const char *from, const char *to, const char *const *list, unsigned n);
+void ws_reconcile(struct ws_client *prev, unsigned n_prev, struct ws_event *events,
+                  unsigned n_events, int64_t prev_current);
+bool ws_start(xcb_window_t w, const char *trigger, const struct ws_monitor *m,
+              uint64_t first, uint64_t last);
 void ws_compute(const struct picom_animation_start *start,
                 double values[static WS_N_VARIABLES]);
-unsigned ws_unstarted_switch(const struct ws_monitor *m);
 void ws_start_passes(void);

@@ -5,7 +5,7 @@ commits. For using it, see the [README](README.md).
 
 ## Building against the picom fork
 
-The plugin needs plugin API 0.5 of the picom fork. No picom release has it yet; it is on
+The plugin needs plugin API 0.7 of the picom fork. No picom release has it yet; it is on
 the `main` branch of the picom fork the plugin is developed with (github.com/JornC/picom),
 which is picom's `next` branch plus one commit per feature. That branch is not published
 yet. CI builds against it at `PICOM_REF` in `.github/workflows/ci.yml`.
@@ -66,13 +66,14 @@ Variables:
 ### Unit tests
 
 `tests/unit` has 56 tests of the logic that works on the plugin's state: which monitor a
+`tests/unit` has 65 tests of the logic that works on the plugin's state: which monitor a
 workspace is on, the order of a monitor's workspaces, the steps of a switch, which
 workspace each monitor shows, which switch each show and hide is part of, and the
 variables, through `ws_compute`. They run in about 10 ms, without an X server. They link
 `desktop.o` and `passes.o`; `tests/unit/fixture.c` stands in for `plugin.c` (the state, a
 log into a buffer and a fake clock), gives a picom API that records the animations
-started, and sets up what a window manager would: the workspaces, the current desktop
-and the managed windows, as a read finds them.
+started, and plays what a window manager does: maps, unmaps and changes of the current
+desktop, as the events a read takes in.
 
 `tests/unit/test.h` is the runner, about 100 lines. Write a test as `TEST(name) { ... }`
 in any `tests/unit/*.c`; the runner finds it. `CHECK`, `CHECK_INT`, `CHECK_STR` and

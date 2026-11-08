@@ -21,14 +21,15 @@ makes them.
 
 ## Requirements
 
-- **picom with plugin API 0.5 of the picom fork**: the animation variable hook, frame
-  callbacks that can start animations, custom triggers a plugin declares, and a paused
-  screen. No picom release has it yet. Its first part, the animation variable hook, is
-  proposed to picom upstream; the rest is only in the picom fork this plugin is
-  developed with. Upstream picom numbers its plugin API on its own (it is at 0.1); once
-  it has these calls, the plugin will ask for upstream's number. Any other picom prints
-  `ws-direction: picom's plugin API is not compatible` and runs without the variables,
-  so every animation whose script reads one fails to load.
+- **picom with plugin API 0.7 of the picom fork**: the animation variable hook, frame
+  callbacks that can start animations, custom triggers a plugin declares, a paused
+  screen, and a wakeup when the plugin's X connection has data. No picom release has it
+  yet. Its first part, the animation variable hook, is proposed to picom upstream; the
+  rest is only in the picom fork this plugin is developed with. Upstream picom numbers
+  its plugin API on its own (it is at 0.1); once it has these calls, the plugin will ask
+  for upstream's number. Any other picom prints `ws-direction: picom's plugin API is not
+  compatible` and runs without the variables, so every animation whose script reads one
+  fails to load.
 - **X11**. The monitors come from RandR.
 - **An EWMH window manager.** It is tested with i3 only. See
   [Window manager integration](#window-manager-integration) for what the plugin needs
@@ -208,9 +209,13 @@ no `ws-pass` animation. Such a window gets its `show` or `hide` as usual.
 `plugin-ws-direction-direction`
 : 1 if the new workspace sorts after the old one, -1 if before, 0 if the animation is
   not part of a workspace switch on the window's monitor (a new window, scratchpad,
-  fullscreen, a window moved to another workspace). `ws-pass` carries the switch the
-  plugin started it for. A custom trigger the plugin didn't start, such as one started
-  with picom's `StartAnimations` (see picom(1)), is never part of a switch.
+  fullscreen, a window moved to another workspace). A `show` or `open` is part of a
+  switch when the window manager showed the window to make that switch, a `hide` when it
+  hid it to make it (see [How it works](#how-it-works)); a new window is never part of
+  one. `ws-pass` carries the switch the plugin started it for, if any. A custom trigger
+  the plugin didn't start, such as one started with picom's `StartAnimations` (see
+  picom(1)), is never part of a switch, and neither are `size`, `position`, `color`,
+  `increase-opacity` and `decrease-opacity`.
 
 `plugin-ws-direction-distance`
 : How many workspaces of the monitor the switch moved: 1 to the next one, 2 when it
@@ -295,7 +300,26 @@ The plugin uses only what an EWMH window manager already does. It reads:
   their order), `_NET_DESKTOP_VIEWPORT` (which monitor each workspace is on) and
   `_NET_CLIENT_LIST` (the windows it manages);
 - on client windows: `_NET_WM_DESKTOP` and `_NET_WM_STATE` (`_NET_WM_STATE_HIDDEN`);
-- the monitors from RandR, and a window's place with `GetGeometry`.
+- the monitors from RandR, a window's place with `GetGeometry` and
+  `TranslateCoordinates`, whether it is on screen with `GetWindowAttributes`, and its
+  frame with `QueryTree`;
+- the maps and unmaps of top-level windows, as events (`SubstructureNotify` on the root
+  window).
+
+i3 sets the viewport of each workspace to the corner of its output, so the viewports
+say which monitor each workspace is on. The plugin takes them that way only where that
+holds: when they are not all the same, and each one is the top left corner of a RandR
+monitor. Otherwise every workspace spans the whole screen, as one monitor: a window
+manager without large desktops sets every viewport to 0,0, as EWMH asks, and with large
+desktops a viewport is a place on the desktop. Without `_NET_DESKTOP_VIEWPORT`, every
+workspace spans the whole screen too. Under i3 with one output the viewports are all the
+same, and the whole screen is that output.
+
+The order in which a window manager changes these properties and maps or unmaps windows
+doesn't matter (see [How it works](#how-it-works)). Some window managers map the windows
+of the new workspace before they change `_NET_CURRENT_DESKTOP`: a map of a window of a
+workspace the plugin didn't think was shown is a switch to it, and the plugin starts
+`ws-pass` for it in that pass.
 
 ## Troubleshooting
 
@@ -321,11 +345,14 @@ The plugin uses only what an EWMH window manager already does. It reads:
   already moving in is sometimes not drawn for a frame or two. That is a bug in the
   xrender backend, not in the style; the glx backend doesn't have it, and with
   `use-damage = false` it doesn't happen either.
-- **A switch has no animation, or a window that shows or hides fades.** A switch is only
-  seen when a window starts an animation whose script reads the variables, and a window
-  belongs to a switch for 100 ms, or for 2 passes within 250 ms when frames are slow. A
-  switch made while picom has the screen unredirected (`unredir-if-possible`), and a
-  window that comes later on a heavily loaded machine, get 0.
+- **A switch has no animation while a fullscreen window shows.** A switch made while
+  picom has the screen unredirected (`unredir-if-possible`) is seen, but picom draws no
+  animation for it.
+- **A window that hides fades instead of moving with the switch.** A window manager
+  that hides the windows of the old workspace, then waits, and then shows the new one
+  without changing `_NET_CURRENT_DESKTOP` first leaves the plugin a moment in which no
+  workspace is shown on that monitor. A hide in that moment comes before the plugin can
+  know where the switch goes, so it gets direction 0. i3 shows the new windows first.
 - **A changed copy of a style doesn't take effect.** Save `picom.conf` once after you
   make the copy, so picom reads it.
 
@@ -334,12 +361,53 @@ The plugin uses only what an EWMH window manager already does. It reads:
 The plugin reads the properties listed under
 [Other EWMH window managers](#other-ewmh-window-managers). The order in which a window
 manager changes these properties and maps or unmaps windows is not specified, and the
-changes can reach picom over several frames, so the plugin does not act on events. It
-remembers, per monitor, the workspaces shown recently and when it last saw a part of
-each switch. When a window starts an animation whose script reads a variable, it looks
-for a recent switch to or away from the window's workspace on its monitor. All
-variables of a window are worked out in one go, and the root window is read once per
-picom update pass, however many windows start in it.
+changes can reach picom over several frames, so the variables don't depend on that
+order, nor on how long the window manager takes.
+
+The plugin's own connection gets the root window's property changes and every map and
+unmap of a top-level window as events, in the order the X server made them. picom calls
+the plugin at the start of every update pass; when such an event came, the plugin reads
+the root window and the managed windows there, and takes the events in order. An event's
+sequence number says whether the read already saw it. Which workspace each monitor shows
+changes when `_NET_CURRENT_DESKTOP` names one of its workspaces, when a window of another
+of its workspaces maps (a window manager maps only windows of shown workspaces), or when
+the read says so: the workspace with windows on screen, else the one workspace of the
+monitor without windows (i3 removes the others once they are hidden). Each change is a
+switch, on whichever monitor, and the plugin starts `ws-pass` for it in that pass.
+
+A switch from A to B gives each window that existed before it a pending show, if it is
+on B and was not on screen, or a pending hide, if it is on A and was. The window's next
+map or unmap takes it: that show or hide is part of the switch. Every other show or hide
+is part of none: a new window, a dialog, a window moved to another workspace, a sibling
+of a fullscreen window, however soon after the switch. Late parts of a switch still
+belong to it, however late. A switch that comes before the window manager showed or hid
+anything for the one before goes on from it, as one move: i3 makes
+`workspace 2; workspace 4` that way. The plugin remembers the last 8 switches of each monitor,
+and forgets those of a monitor that RandR no longer lists. For `ws-pass`, `ws-unfold`
+and `ws-fold` the plugin remembers why it started them, and answers from that.
+
+When a window starts an animation whose script reads a variable, all variables of the
+window are worked out in one go. The root window and every managed window are read at
+most once per picom update pass, however many windows start in it. picom also runs
+passes while it doesn't composite, so the plugin sees those switches too.
+
+That makes the plugin part of every pass, so also of every frame of an animation. When
+nothing changed, it only takes what the X server already sent it, without waiting. A
+pass in which the root window or a top-level window changed, and the first animation
+start in a pass (but for a window that closes), read the root window and the managed
+windows in two round trips to the X server: one for the root window, the top-level
+windows and the window list, one for every managed window (six small requests each),
+with the desktop names asked again at the end; if they changed in between, it reads
+again. Later starts in the same pass cost nothing, except for a window the window
+manager doesn't manage: one round trip for its place. On Xvfb with i3 and a dozen
+windows the two round trips take 0.1 to 0.2 ms. But the X server is often busy with the
+switch itself, and then its replies can take 20 ms. So in its frame callback the plugin
+waits at most 1 ms for them. If they are not in by then, it pauses the screen
+(`pause_screen`, a pause of its own that no other plugin can end) and lets picom go on:
+picom draws nothing and starts no animation until the replies are in, and then
+everything that changed meanwhile animates, the switch and any window that opened or
+closed. The switch starts that much later, but no frame of it is dropped. A start that
+picom asks the plugin about still waits for the replies.
 
 The plugin reads X on its own connection. The read happens after picom has handled the
 events of the pass, but it is not ordered against picom's own request queue.

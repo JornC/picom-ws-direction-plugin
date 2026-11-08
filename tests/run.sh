@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Test harness for the ws-direction picom plugin, and so for the picom plugin API it builds
-# on (animation variables, frame callbacks, start_animation, add_animation_trigger and
-# pause_screen: plugin API 0.5).
+# on (animation variables, frame callbacks, start_animation, add_animation_trigger,
+# pause_screen and add_wakeup_fd: plugin API 0.7).
 #
 # Phase 1: a nested Xvfb with two monitors (DPT 3440x1440 at +0+480, HDT 1080x1920 at
 # +3440+0), stock i3, xterms on several workspaces, and picom with the plugin,
@@ -19,10 +19,10 @@
 # Phase 1 also starts a custom animation trigger over picom's D-Bus interface
 # (StartAnimations) on an xterm of a hidden workspace, and checks a screenshot shows it
 # while the animation runs, and that started right after a switch on the xterms of the
-# workspaces in between, it gets the switch. Then it checks that the plugin itself starts
-# the custom trigger ws-pass on the xterms of the workspaces a switch passes, in the pass
-# of the switch, and takes a screenshot halfway through such a switch. The harness runs on
-# a D-Bus session bus of its own.
+# workspaces in between, it is still part of no switch: the plugin didn't start it. Then
+# it checks that the plugin itself starts the custom trigger ws-pass on the xterms of the
+# workspaces a switch passes, in the pass of the switch, and takes a screenshot halfway
+# through such a switch. The harness runs on a D-Bus session bus of its own.
 #
 # Phase 2: i3 is replaced by fakewm.c, a tiny stand-in window manager. It can spread one
 # workspace switch over several picom frames, and set up cases i3 won't produce on demand
@@ -34,14 +34,14 @@
 # $WSDIR_DISPLAY (default :91), never on the real display, and only processes started
 # here are stopped.
 #
-# Run it alone, not next to builds: the fakewm case with 40 ms gaps can run past the
-# plugin's 100 ms switch lifetime on a loaded machine or under a sanitizer build. Rerun
-# it alone before treating that failure as a bug.
+# Run it alone, not next to builds: its screenshots are timed, and on a loaded machine
+# they can miss the moment they look for. Rerun a failure alone before treating it as a
+# bug.
 #
 # Usage: make && tests/run.sh, or make check-harness; make check-all runs the unit tests
 # first.
 # Environment: PICOM (picom binary, default: picom on the PATH; it must have plugin API
-# 0.5), I3 (default /usr/bin/i3),
+# 0.7), I3 (default /usr/bin/i3),
 # WSDIR_DISPLAY (default :91), WSDIR_WORK (directory for the i3 socket and logs, default
 # $XDG_RUNTIME_DIR/wsdir-<display number>), WSDIR_SETTLE (seconds to wait after each
 # step, default 0.7), WSDIR_PLUGIN (the plugin, default build/ws-direction.so).
@@ -442,7 +442,7 @@ else
 	fail "slide style loads (picom --diagnostics)" "see $OUT/diagnostics.out"
 fi
 if grep -q "plugin API is not compatible" "$OUT/diagnostics.out"; then
-	die "this picom does not have plugin API 0.5, see $OUT/diagnostics.out"
+	die "this picom does not have plugin API 0.7, see $OUT/diagnostics.out"
 fi
 "$PICOM" --config "$OUT/wave.conf" --diagnostics >"$OUT/diagnostics-wave.out" 2>&1
 grep -qx "  - wave" "$OUT/diagnostics-wave.out" ||
@@ -618,6 +618,18 @@ GOT=$(directions_since "$mark")
 expect "a new window opens on the visible workspace: 0" "new-a show 0"
 stop "$LAST_PID"
 sleep "$SETTLE"
+# A window that opens on the new workspace right after a switch is not part of it.
+mark=$(log_mark)
+i3cmd 'workspace 2:Web'
+start_xterm ws2 new2-a
+NEW2_PID=$LAST_PID
+sleep "$SETTLE"
+GOT=$(directions_since "$mark")
+expect "a window that opens right after DPT 1->2 is not part of it: 0" \
+	"ws1-a hide 1" "ws1-b hide 1" "ws2-a show 1" "new2-a show 0"
+stop "$NEW2_PID"
+sleep "$SETTLE"
+i3_case "DPT 2->1" 'workspace 1:IDE' "ws2-a hide -1" "ws1-a show -1" "ws1-b show -1"
 
 i3_case "DPT 1->Notes: names without a number sort after numbered ones" \
 	'workspace Notes' "ws1-a hide 1" "ws1-b hide 1" "notes-a show 1"
@@ -813,16 +825,16 @@ expect "  (not part of a switch: face -3 from 8, which DPT shows, of its 7)" \
 	"ws2-a wave direction 0 distance 0 face -3/7 selected 1 placed 1 $DPT_RECT"
 i3cmd 'workspace 1:IDE'
 sleep "$SETTLE"
-# Started right after a switch, on the xterms of the workspaces it passes: they get the
-# switch, and their place between the two.
+# Started right after a switch, on the xterms of the workspaces it passes: the plugin
+# didn't start them, so they are part of no switch, and face counts from 7.
 mark=$(log_mark)
 i3cmd 'workspace 7:Extra'
 start_wave "$WS2" "$(win_id ws4-a)"
 sleep "$SETTLE"
 GOT=$(variables_since "$mark" wave)
-expect "StartAnimations right after DPT 1->7: 2 and 4 in between get the switch" \
-	"ws2-a wave direction 1 distance 3 face 1/6 selected 1 placed 1 $DPT_RECT" \
-	"ws4-a wave direction 1 distance 3 face 2/6 selected 1 placed 1 $DPT_RECT"
+expect "StartAnimations right after DPT 1->7: part of no switch, the plugin didn't start it" \
+	"ws2-a wave direction 0 distance 0 face -2/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a wave direction 0 distance 0 face -1/6 selected 1 placed 1 $DPT_RECT"
 sleep 2
 i3cmd 'workspace 1:IDE'
 sleep "$SETTLE"
@@ -923,10 +935,26 @@ pass_switch "DPT 1->2, which passes nothing: ws-pass on all of DPT's xterms" 'wo
 pass_switch "HDT 3->5 while DPT shows 2: only HDT's xterms" 'workspace 5:Music' \
 	"ws3-a ws-pass direction 1 distance 1 face 0/2 selected 1 placed 1 $HDT_RECT" \
 	"ws5-a ws-pass direction 1 distance 1 face 1/2 selected 1 placed 1 $HDT_RECT"
-# Not at once, so the plugin sees HDT's switch on the root window too (see README,
-# Limits).
-i3cmd 'workspace 3:Term'
+# One command switches HDT back to 3 and goes on to DPT, so _NET_CURRENT_DESKTOP ends on
+# DPT, and HDT's xterms are still in the ws-pass of 3->5, which suppresses their show and
+# hide. The plugin sees HDT's switch from the map of 3's xterm, and starts ws-pass for
+# it. Moving the focus to HDT then starts nothing.
+mark=$(log_mark)
+i3cmd 'workspace 3:Term; workspace 2:Web'
 sleep "$SETTLE"
+seen=$(tail -n +"$((mark + 1))" "$LOG" |
+	grep -cE 'Workspace switch on monitor at 3440,0: "5:Music" -> "3:Term".*from a map')
+passes=$(tail -n +"$((mark + 1))" "$LOG" | grep -c 'Switch "5:Music" -> "3:Term" has 2 windows, started ws-pass on 2')
+mark=$(log_mark)
+i3cmd 'focus output HDT'
+sleep "$SETTLE"
+after=$(tail -n +"$((mark + 1))" "$LOG" | grep -cE 'Workspace switch|started ws-pass')
+if ((seen == 1 && passes == 1 && after == 0)); then
+	pass "HDT 5->3 in a command that goes back to DPT: seen from the map, and focusing HDT then starts nothing"
+else
+	fail "HDT 5->3 in a command that goes back to DPT: seen from the map, and focusing HDT then starts nothing" \
+		"switch lines: $seen, ws-pass lines: $passes (1 each), lines after the focus move: $after (0); see $LOG"
+fi
 i3cmd 'workspace 1:IDE'
 sleep "$(pass_time 1 1.1)"
 
@@ -1005,15 +1033,18 @@ done
 FA=$(win_id fa) FB=$(win_id fb) FB2=$(win_id fb2) FC=$(win_id fc) FC2=$(win_id fc2)
 FD=$(win_id fd) FS=$(win_id fs) FU=$(win_id fu)
 # DPT shows 1:A (fa, and the sticky fs), HDT shows 3:C (fc).
+# fb2 is not managed yet: it opens in the first case.
 fakewm names 1:A,2:B,3:C,4:D viewport 0,480,0,480,3440,0,3440,0 current 0 \
-	clients "$FA:0,$FB:1,$FB2:1,$FC:2,$FC2:2,$FD:3,$FS:sticky" desktop "$FU" 1 \
+	clients "$FA:0,$FB:1,$FC:2,$FC2:2,$FD:3,$FS:sticky" desktop "$FB2" 1 desktop "$FU" 1 \
 	unmap "$FB" unmap "$FB2" unmap "$FC2" unmap "$FD" unmap "$FU"
 
 start_picom "$CONFIG" picom-fake
 mark=$(log_mark)
-fake_case "DPT 1:A->2:B as root change, map, unmap 40 ms apart; an unrelated window shows 300 ms later" \
-	"current 1 sleep 40 map $FB sleep 40 unmap $FA sleep 300 map $FB2" \
+fake_case "DPT 1:A->2:B as root change, map, and an unmap 360 ms later: no clock, the late hide is part of it" \
+	"current 1 sleep 40 map $FB sleep 20 clients $FA:0,$FB:1,$FB2:1,$FC:2,$FC2:2,$FD:3,$FS:sticky map $FB2 sleep 300 unmap $FA" \
 	"fb show 1" "fa hide 1" "fb2 show 0"
+GOT=$(directions_since "$mark" | grep fb2)
+expect "  (a new window that opens 60 ms after the switch is not part of it)" "fb2 show 0"
 t_switch=$(log_time_ms "$mark" 'Workspace switch on monitor')
 # The decision lines, not picom's own lines about these windows.
 t_show=$(log_time_ms "$mark" 'of window 0x[0-9a-f]+ \(fb\): direction = ')

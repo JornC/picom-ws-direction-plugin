@@ -1,73 +1,46 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) JornC
 
-/// Switches, and the variables.
-/// An animation is part of a recent switch on the window's monitor when it is a show or
-/// open of a window of the workspace switched to, a hide of a window of the workspace
-/// switched away from, or any trigger that picom does not fire for a change of the window
-/// itself, such as ws-pass or a custom trigger started with StartAnimations (see
-/// picom(1)).
+/// Switches, ws-pass, and the variables.
 ///
-/// On every switch we start the custom trigger ws-pass on all windows of the switch:
-/// those of the workspace switched away from, of the one switched to, and of the
-/// workspaces in between (those of the monitor that sort between the two). We start them
-/// in the pass in which we see the switch, so they all begin together, also when the
-/// window manager hides and shows them over more than one pass. A window that moved to
-/// another workspace together with the switch stays on screen, so it is left out. We
-/// declare ws-pass ourselves (add_animation_trigger), so a config uses it without listing
-/// it in animation-triggers. A config that wants the windows in between drawn keeps their
-/// images (keep-image-when-hidden) and gives them a ws-pass animation that suppresses
-/// show and hide, so a show or hide that comes later does not restart them.
-/// picom ignores the start for a window without a ws-pass animation, and for one it
-/// cannot draw because it has no image yet; such a window gets its show or hide as usual.
+/// Which workspace a monitor shows, and so its switches, comes from what the window
+/// manager did, in the order it did it (ws_reconcile, after each read): a change of
+/// _NET_CURRENT_DESKTOP to a workspace of the monitor, a map of a window of another of
+/// its workspaces (a window manager maps only the windows of shown workspaces), and the
+/// windows a read sees viewable. A switch S from A to B gives each window that existed
+/// before it a pending show, if it is on B and was not viewable just before S, or a
+/// pending hide, if it is on A and was viewable. The window's next map or unmap takes it:
+/// that show or hide is part of S. Any other show or hide is part of no switch, however
+/// soon after the switch it comes: a new window, a dialog, a window moved to another
+/// workspace, a sibling of a fullscreen window. No clock is involved, so a window manager
+/// that takes long, or a busy machine, gets the same answer.
+///
+/// On every switch we start the custom trigger ws-pass on all windows of the monitor:
+/// those of the workspace switched away from, of the one switched to, of the workspaces
+/// in between, and of its other workspaces. We start them in the pass in which we see the
+/// switch, so they all begin together, also when the window manager hides and shows them
+/// over more than one pass. A window that is viewable before and after the switch moved
+/// along with it, and stays on screen, so it is left out. We declare ws-pass ourselves
+/// (add_animation_trigger), so a config uses it without listing it in animation-triggers.
+/// A config that wants the windows in between drawn keeps their images
+/// (keep-image-when-hidden) and gives them a ws-pass animation that suppresses show and
+/// hide, so a show or hide that comes later does not restart them. picom ignores the
+/// start for a window without a ws-pass animation, and for one it cannot draw because it
+/// has no image yet; such a window gets its show or hide as usual.
+///
+/// For the triggers we start, we remember why (ws_start), and the variables
+/// say that. A custom trigger we didn't start, such as one started over D-Bus, is part of
+/// no switch.
 
 #include <stdlib.h>
 #include <string.h>
 
 #include "ws_direction.h"
 
-/// How long a workspace switch stays usable after we last saw a part of it (the root
-/// window change, or a window of it that shows or hides). The window manager makes all
-/// the changes for one switch at once, but they can reach picom over a few frames. This
-/// is long enough to cover that, and short enough that an unrelated show or hide right
-/// after the switch gets no direction.
-#define WS_SWITCH_LIFETIME_US (100 * 1000)
-/// A frame can take longer than WS_SWITCH_LIFETIME_US to render (e.g. with software
-/// rendering). So a switch is also used for this many frames after the one we saw it
-/// in, as long as they start within WS_SWITCH_MAX_LIFETIME_US.
-#define WS_SWITCH_LIFETIME_FRAMES 2
-#define WS_SWITCH_MAX_LIFETIME_US (250 * 1000)
-
-struct ws_order ws_order_of(const char *name, unsigned position) {
-	struct ws_order ret = {.position = position};
-	for (const char *p = name; *p >= '0' && *p <= '9'; p++) {
-		ret.numbered = true;
-		ret.number = ret.number * 10 + (uint64_t)(*p - '0');
-		if (ret.number > UINT32_MAX) {
-			ret.number = UINT32_MAX;
-		}
-	}
-	return ret;
-}
-
-/// Returns 1 if `a` sorts after `b`, -1 if it sorts before, 0 if they are the same.
-int ws_order_compare(struct ws_order a, struct ws_order b) {
-	if (a.numbered != b.numbered) {
-		return a.numbered ? -1 : 1;
-	}
-	if (a.numbered && a.number != b.number) {
-		return a.number > b.number ? 1 : -1;
-	}
-	if (a.position != b.position) {
-		return a.position > b.position ? 1 : -1;
-	}
-	return 0;
-}
-
 /// Index of the monitor that fully contains a window, -1 for "all monitors".
 int ws_rect_monitor(struct ws_rect r) {
 	for (int i = 0; i < wsd.n_monitors; i++) {
-		auto e = &wsd.monitors[i];
+		auto e = &wsd.monitors[i].rect;
 		if (e->x1 <= r.x1 && r.x2 <= e->x2 && e->y1 <= r.y1 && r.y2 <= e->y2) {
 			return i;
 		}
@@ -75,271 +48,501 @@ int ws_rect_monitor(struct ws_rect r) {
 	return -1;
 }
 
-/// The rect of a monitor, the whole screen for -1.
-static struct ws_rect ws_monitor_rect(int index) {
-	return index >= 0 ? wsd.monitors[index] : wsd.screen;
+static xcb_atom_t ws_monitor_name(int index) {
+	return index >= 0 ? wsd.monitors[index].name : XCB_NONE;
 }
 
-/// Find what we know about the monitor of a desktop. Returns NULL if nothing.
-struct ws_monitor *ws_find_monitor(unsigned desktop) {
-	auto index = ws_desktop_monitor(desktop);
+/// What we know about the monitor with index `index` (-1 for the whole screen), or NULL.
+struct ws_monitor *ws_find_monitor(int index) {
+	auto name = ws_monitor_name(index);
 	for (unsigned i = 0; i < wsd.n_tracked; i++) {
-		auto m = &wsd.tracked[i];
-		if (ws_monitor_index(m->has_viewport, m->viewport_x, m->viewport_y) == index) {
-			return m;
+		if (wsd.tracked[i].name == name) {
+			return &wsd.tracked[i];
 		}
 	}
 	return NULL;
 }
 
-static struct ws_visit *ws_shown(struct ws_monitor *m) {
-	return &m->visits[m->n_visits - 1];
+/// What we know about the monitor of desktop `desktop`, or NULL.
+struct ws_monitor *ws_monitor_of(unsigned desktop) {
+	return ws_find_monitor(ws_desktop_monitor(desktop));
 }
 
-/// Whether desktop `desktop` is a workspace that a switch from `from` to `to` on the
-/// monitor with index `index` passes: one of that monitor that sorts between the two.
-bool ws_passes(struct ws_order from, struct ws_order to, int index, unsigned desktop) {
-	auto low = ws_order_compare(to, from) > 0 ? from : to;
-	auto high = ws_order_compare(to, from) > 0 ? to : from;
-	auto order = ws_order_of(wsd.names[desktop], desktop);
-	return ws_desktop_monitor(desktop) == index && ws_order_compare(order, low) > 0 &&
-	       ws_order_compare(order, high) < 0;
-}
-
-/// The way from workspace `from` to workspace `to` on the monitor with index `index`. The
-/// distance counts the workspaces of the monitor that sort between the two, as they are
-/// now: with i3, an empty workspace that isn't shown doesn't exist, so it doesn't count.
-struct ws_move ws_steps(struct ws_order from, struct ws_order to, int index) {
-	struct ws_move ret = {.direction = ws_order_compare(to, from)};
-	if (ret.direction == 0) {
-		return ret;
+/// What we know about the monitor with index `index`, made if it is new. Returns NULL if
+/// we track too many monitors already.
+struct ws_monitor *ws_get_monitor(int index) {
+	auto m = ws_find_monitor(index);
+	if (m == NULL && wsd.n_tracked < WS_MAX_MONITORS) {
+		m = &wsd.tracked[wsd.n_tracked++];
+		*m = (struct ws_monitor){.name = ws_monitor_name(index)};
 	}
-	ret.distance = 1;
+	return m;
+}
+
+static void ws_free_list(char **list, unsigned n) {
+	for (unsigned i = 0; i < n; i++) {
+		free(list[i]);
+	}
+	free(list);
+}
+
+static void ws_free_switch(struct ws_switch *s) {
+	free(s->from);
+	free(s->to);
+	ws_free_list(s->list, s->n_list);
+}
+
+/// Free what monitor `m` holds.
+void ws_free_monitor(struct ws_monitor *m) {
+	free(m->shown);
+	ws_free_list(m->list, m->n_list);
+	for (unsigned k = 0; k < m->n_switches; k++) {
+		ws_free_switch(&m->switches[k]);
+	}
+}
+
+/// The switch with id `id` on monitor `m`, or NULL if it is not there (any more).
+const struct ws_switch *ws_find_switch(const struct ws_monitor *m, uint64_t id) {
+	for (unsigned k = 0; m != NULL && id != 0 && k < m->n_switches; k++) {
+		if (m->switches[k].id == id) {
+			return &m->switches[k];
+		}
+	}
+	return NULL;
+}
+
+/// The workspaces of the monitor with index `index`, in the order of their desktops
+/// (under i3 that is their order on the output). Returns how many.
+unsigned ws_monitor_list(int index, const char *list[static WS_MAX_DESKTOPS]) {
+	unsigned n = 0;
 	for (unsigned d = 0; d < wsd.n_names; d++) {
-		ret.distance += ws_passes(from, to, index, d);
+		if (ws_desktop_monitor(d) == index) {
+			list[n++] = wsd.names[d];
+		}
 	}
-	return ret;
+	return n;
 }
 
-/// The switch to `m->visits[k]`, `k` must be at least 1.
-static struct ws_move ws_switch_move(const struct ws_monitor *m, unsigned k) {
-	auto index = ws_monitor_index(m->has_viewport, m->viewport_x, m->viewport_y);
-	return ws_steps(m->visits[k - 1].order, m->visits[k].order, index);
-}
-
-static bool ws_switch_is_recent(const struct ws_visit *v) {
-	if (v->time_us == 0) {
-		return false;
-	}
-	auto age = wsd.frame_time_us - v->time_us;
-	auto frames = wsd.frame - v->frame;
-	return age < WS_SWITCH_LIFETIME_US ||
-	       (frames <= WS_SWITCH_LIFETIME_FRAMES && age < WS_SWITCH_MAX_LIFETIME_US);
-}
-
-/// We saw another part of a switch, keep it usable.
-static void ws_switch_touch(struct ws_visit *v) {
-	v->time_us = wsd.frame_time_us;
-	v->frame = wsd.frame;
-}
-
-/// Describe where we learned something: window `w`, or the root window if `w` is 0.
-static void ws_source(char buf[static 32], xcb_window_t w) {
-	if (w == XCB_NONE) {
-		strcpy(buf, "the root window");
-	} else {
-		snprintf(buf, 32, "window %#010x", w);
-	}
-}
-
-/// Index of the latest visit to workspace `name`, or -1.
-static int ws_find_visit(const struct ws_monitor *m, const char *name) {
-	for (int k = (int)m->n_visits - 1; k >= 0; k--) {
-		if (strcmp(m->visits[k].name, name) == 0) {
-			return k;
+/// Where `name` is in `list`, or -1.
+int ws_list_find(const char *const *list, unsigned n, const char *name) {
+	for (unsigned i = 0; name != NULL && i < n; i++) {
+		if (strcmp(list[i], name) == 0) {
+			return (int)i;
 		}
 	}
 	return -1;
 }
 
-static struct ws_visit ws_visit_of(unsigned desktop) {
-	struct ws_visit ret = {
-	    .name = strdup(wsd.names[desktop]),
-	    .order = ws_order_of(wsd.names[desktop], desktop),
-	};
-	if (ret.name == NULL) {
+/// `list` with the names of `more` that it doesn't have, each after the name it came
+/// after in `more`. Returns how many; `out` has room for 2 * WS_MAX_DESKTOPS.
+static unsigned ws_merge(const char *const *list, unsigned n, const char *const *more,
+                         unsigned n_more, const char **out) {
+	memcpy(out, list, n * sizeof(*out));
+	for (unsigned i = 0; i < n_more; i++) {
+		if (ws_list_find(out, n, more[i]) >= 0) {
+			continue;
+		}
+		unsigned at = 0;
+		for (int j = (int)i - 1; j >= 0; j--) {
+			auto before = ws_list_find(out, n, more[j]);
+			if (before >= 0) {
+				at = (unsigned)before + 1;
+				break;
+			}
+		}
+		memmove(&out[at + 1], &out[at], (n - at) * sizeof(*out));
+		out[at] = more[i];
+		n++;
+	}
+	return n;
+}
+
+/// The way from workspace `from` to workspace `to` in `list`. The distance counts the
+/// steps between them in the list. Both 0 if either is not in it.
+struct ws_move
+ws_steps(const char *from, const char *to, const char *const *list, unsigned n) {
+	int a = ws_list_find(list, n, from), b = ws_list_find(list, n, to);
+	if (a < 0 || b < 0 || a == b) {
+		return (struct ws_move){0};
+	}
+	return (struct ws_move){.direction = b > a ? 1 : -1,
+	                        .distance = (unsigned)(b > a ? b - a : a - b)};
+}
+
+/// The workspaces of switches `first` to `last` (the same switch for one), merged as for
+/// one switch, in `out` (room for 2 * WS_MAX_DESKTOPS). Returns how many.
+static unsigned
+ws_span_list(const struct ws_switch *first, const struct ws_switch *last, const char **out) {
+	return ws_merge((const char *const *)last->list, last->n_list,
+	                (const char *const *)first->list, first->n_list, out);
+}
+
+static char **ws_copy_list(const char *const *list, unsigned n) {
+	char **ret = calloc(n + 1, sizeof(*ret));
+	if (ret == NULL) {
+		abort();
+	}
+	for (unsigned i = 0; i < n; i++) {
+		ret[i] = strdup(list[i]);
+		if (ret[i] == NULL) {
+			abort();
+		}
+	}
+	return ret;
+}
+
+static char *ws_strdup(const char *s) {
+	char *ret = strdup(s);
+	if (ret == NULL) {
 		abort();
 	}
 	return ret;
 }
 
-/// Record a switch to `desktop` on monitor `m`, as visit `k` (at most `m->n_visits`).
-/// `w` is the window we learned this from, or 0 if it was the root window.
-static void ws_add_switch(struct ws_monitor *m, unsigned k, unsigned desktop, xcb_window_t w) {
-	if (m->n_visits == WS_HISTORY) {
-		// Forget the oldest one.
-		free(m->visits[0].name);
-		memmove(&m->visits[0], &m->visits[1], sizeof(m->visits[0]) * (WS_HISTORY - 1));
-		m->n_visits--;
-		k--;
-	}
-	memmove(&m->visits[k + 1], &m->visits[k], sizeof(m->visits[0]) * (m->n_visits - k));
-	m->n_visits++;
-	m->visits[k] = ws_visit_of(desktop);
-	m->visits[k].from_root = w == XCB_NONE;
-	ws_switch_touch(&m->visits[k]);
-
-	char source[32];
-	ws_source(source, w);
-	auto move = ws_switch_move(m, k);
-	ws_log("Workspace switch on monitor at %d,%d: \"%s\" -> \"%s\", direction %d, "
-	       "distance %u (from %s, in pass %llu)",
-	       m->viewport_x, m->viewport_y, m->visits[k - 1].name, m->visits[k].name,
-	       move.direction, move.distance, source, (unsigned long long)wsd.frame);
-}
-
-/// Get what we know about the monitor of `desktop`. If we know nothing yet, assume it
-/// shows `desktop`. `w` is the window we learned this from, or 0 if it was the root
-/// window. Returns NULL if we track too many monitors already.
-struct ws_monitor *ws_get_monitor(unsigned desktop, xcb_window_t w) {
-	auto m = ws_find_monitor(desktop);
-	if (m == NULL) {
-		if (wsd.n_tracked == WS_MAX_MONITORS) {
-			return NULL;
-		}
-		m = &wsd.tracked[wsd.n_tracked++];
-		*m = (struct ws_monitor){.n_visits = 1};
-		m->visits[0] = ws_visit_of(desktop);
-		char source[32];
-		ws_source(source, w);
-		ws_log("Workspace \"%s\" is shown (from %s)", wsd.names[desktop], source);
-	}
-	// Workspaces can move between monitors.
-	m->has_viewport = ws_desktop_viewport(desktop, &m->viewport_x, &m->viewport_y);
-	return m;
-}
-
-/// Workspaces can change their position in _NET_DESKTOP_NAMES. Sort the ones we remember
-/// by where they are now.
-static void ws_update_orders(void) {
-	for (unsigned i = 0; i < wsd.n_tracked; i++) {
+/// A show or hide was part of switch `id`.
+static void ws_realize(uint64_t id) {
+	for (unsigned i = 0; id != 0 && i < wsd.n_tracked; i++) {
 		auto m = &wsd.tracked[i];
-		for (unsigned k = 0; k < m->n_visits; k++) {
-			auto position = ws_find_desktop(m->visits[k].name);
-			if (position >= 0) {
-				m->visits[k].order =
-				    ws_order_of(m->visits[k].name, (unsigned)position);
+		for (unsigned k = 0; k < m->n_switches; k++) {
+			m->switches[k].realized |= m->switches[k].id == id;
+		}
+	}
+}
+
+/// Per monitor, while ws_reconcile runs: its index, its workspaces in the read before,
+/// and the position of the event at which we last recorded a switch on it.
+struct ws_scan_monitor {
+	struct ws_monitor *m;
+	int index;
+	char **before;
+	unsigned n_before;
+	int last_switch_at;
+};
+
+/// Per window, while ws_reconcile runs: whether it was in the read before, whether it is
+/// viewable at the event we are at, and the position of an unmap not part of a switch.
+struct ws_scan_client {
+	bool existed, viewable;
+	int unmapped_at;
+};
+
+struct ws_scan {
+	struct ws_scan_monitor monitors[WS_MAX_MONITORS];
+	unsigned n_monitors;
+	struct ws_scan_client *clients;
+};
+
+static struct ws_scan_monitor *ws_scan_monitor(struct ws_scan *scan, int index) {
+	for (unsigned i = 0; i < scan->n_monitors; i++) {
+		if (scan->monitors[i].index == index) {
+			return &scan->monitors[i];
+		}
+	}
+	return NULL;
+}
+
+/// Record a switch on monitor `sm->m` to workspace `to`, at the event at position `at`,
+/// and give the windows of its two workspaces their pending show or hide.
+static void ws_add_switch(struct ws_scan *scan, struct ws_scan_monitor *sm,
+                          const char *to, int at, const char *source) {
+	auto m = sm->m;
+	if (m->n_switches == WS_HISTORY) {
+		// Forget the oldest one.
+		ws_free_switch(&m->switches[0]);
+		memmove(&m->switches[0], &m->switches[1],
+		        sizeof(m->switches[0]) * (WS_HISTORY - 1));
+		m->n_switches--;
+	}
+	// The window manager went on before it showed or hid anything for the switch
+	// before, as i3 does for "workspace 2; workspace 4": one move.
+	auto prev = m->n_switches > 0 ? &m->switches[m->n_switches - 1] : NULL;
+	bool chained = prev != NULL && !prev->realized && strcmp(prev->to, m->shown) == 0;
+	auto prev_id = prev != NULL ? prev->id : 0;
+	auto start = chained ? prev->start : wsd.last_switch + 1;
+	const char *now[WS_MAX_DESKTOPS];
+	auto n_now = ws_monitor_list(sm->index, now);
+	const char *list[2 * WS_MAX_DESKTOPS];
+	auto n = ws_merge(now, n_now, (const char *const *)sm->before, sm->n_before, list);
+	auto s = &m->switches[m->n_switches++];
+	*s = (struct ws_switch){
+	    .id = ++wsd.last_switch,
+	    .from = m->shown,
+	    .to = ws_strdup(to),
+	    .list = ws_copy_list(list, n),
+	    .n_list = n,
+	    .start = start,
+	};
+	s->move = ws_steps(s->from, s->to, list, n);
+	m->shown = ws_strdup(to);
+
+	for (unsigned i = 0; i < wsd.n_clients; i++) {
+		auto c = &wsd.clients[i];
+		auto sc = &scan->clients[i];
+		if (c->workspace == NULL || !sc->existed) {
+			continue;
+		}
+		if (chained && c->pending_hide == prev_id && strcmp(c->workspace, s->to) != 0) {
+			c->pending_hide = s->id;
+		}
+		if (strcmp(c->workspace, s->to) == 0) {
+			c->pending_hide = 0;
+			c->pending_show = sc->viewable ? 0 : s->id;
+			if (sc->viewable) {
+				c->along = s->id;
+			}
+		} else if (strcmp(c->workspace, s->from) == 0) {
+			c->pending_show = 0;
+			c->pending_hide = sc->viewable ? s->id : 0;
+			// A window manager that hides the windows of the old workspace
+			// before it shows the new one: those hides are part of it too.
+			if (!sc->viewable && sc->unmapped_at > sm->last_switch_at &&
+			    c->last_hide == 0) {
+				c->last_hide = s->id;
+				s->realized = true;
+				sc->unmapped_at = -1;
 			}
 		}
 	}
+	sm->last_switch_at = at;
+
+	auto r = ws_monitor_rect(sm->index);
+	ws_log("Workspace switch on monitor at %d,%d: \"%s\" -> \"%s\", direction %d, "
+	       "distance %u (from %s, in pass %llu)",
+	       r.x1, r.y1, s->from, s->to, s->move.direction, s->move.distance, source,
+	       (unsigned long long)wsd.frame);
 }
 
-/// Record a switch if the monitor of the current desktop now shows another workspace.
-/// `root_changed` is whether the root window's properties changed since the read before.
-void ws_track_switch(bool root_changed) {
-	ws_update_orders();
-	if (wsd.current < 0 || wsd.current >= wsd.n_names) {
+/// Monitor `sm->m` shows workspace `name` from the event at position `at` on: a switch
+/// if it showed another one.
+static void ws_saw_shown(struct ws_scan *scan, struct ws_scan_monitor *sm,
+                         const char *name, int at, const char *source) {
+	auto m = sm->m;
+	if (m->shown != NULL && strcmp(m->shown, name) == 0) {
 		return;
 	}
-	auto desktop = (unsigned)wsd.current;
-	auto m = ws_get_monitor(desktop, XCB_NONE);
-	if (m == NULL) {
+	if (m->shown == NULL) {
+		m->shown = ws_strdup(name);
+		auto r = ws_monitor_rect(sm->index);
+		ws_log("Workspace \"%s\" is shown on monitor at %d,%d (from %s)", name,
+		       r.x1, r.y1, source);
 		return;
 	}
-	auto shown = ws_shown(m);
-	if (strcmp(shown->name, wsd.names[desktop]) != 0) {
-		ws_add_switch(m, m->n_visits, desktop, XCB_NONE);
-	} else if (root_changed && ws_switch_is_recent(shown)) {
-		// The window manager is still updating the root window for this switch.
-		ws_switch_touch(shown);
-	}
+	ws_add_switch(scan, sm, name, at, source);
 }
 
-/// Take the root window replies, and record a switch if the monitor of the current
-/// desktop now shows another workspace.
-void ws_refresh(struct ws_root_requests requests) {
-	ws_track_switch(ws_read_root_reply(requests));
+/// Which workspace the read says monitor `sm` shows: the one with viewable windows, else
+/// the one of its workspaces that has no windows (i3 removes an empty workspace once it
+/// is hidden, so that one must be shown). The current desktop counts as shown, and
+/// decides between two. NULL if we can't tell, as while the window manager is halfway
+/// through a switch.
+static const char *ws_read_shown(const struct ws_scan_monitor *sm) {
+	const char *list[WS_MAX_DESKTOPS];
+	auto n = ws_monitor_list(sm->index, list);
+	bool candidate[WS_MAX_DESKTOPS] = {0}, has_windows[WS_MAX_DESKTOPS] = {0};
+	for (unsigned i = 0; i < wsd.n_clients; i++) {
+		auto c = &wsd.clients[i];
+		auto k = ws_list_find(list, n, c->workspace);
+		if (k >= 0) {
+			has_windows[k] = true;
+			candidate[k] |= c->viewable;
+		}
+	}
+	const char *current =
+	    wsd.current >= 0 && wsd.current < wsd.n_names ? wsd.names[wsd.current] : NULL;
+	auto k = ws_list_find(list, n, current);
+	if (k >= 0) {
+		candidate[k] = true;
+	}
+	unsigned n_candidates = 0, n_empty = 0;
+	const char *one = NULL, *empty = NULL;
+	for (unsigned i = 0; i < n; i++) {
+		n_candidates += candidate[i];
+		one = candidate[i] ? list[i] : one;
+		n_empty += !has_windows[i];
+		empty = !has_windows[i] ? list[i] : empty;
+	}
+	if (n_candidates == 0) {
+		return n_empty == 1 ? empty : NULL;
+	}
+	if (n_candidates == 1) {
+		return one;
+	}
+	auto shown = ws_list_find(list, n, sm->m->shown);
+	if (shown >= 0 && candidate[shown]) {
+		return sm->m->shown;
+	}
+	return k >= 0 ? current : NULL;
 }
 
-/// The switch that a window of workspace `desktop` that shows is part of. Sets `*mp` to
-/// what we know about the monitor of `desktop`, and returns `k` for the switch to
-/// `(*mp)->visits[k]`, or 0 if the window is not part of a switch.
-static unsigned ws_switch_for_show(xcb_window_t w, unsigned desktop,
-                                   struct ws_monitor **mp, const char **reason) {
-	auto name = wsd.names[desktop];
-	auto m = *mp = ws_get_monitor(desktop, w);
-	if (m == NULL) {
-		*reason = "too many monitors";
-		return 0;
-	}
-	auto k = ws_find_visit(m, name);
-	if (k >= 1 && ws_switch_is_recent(&m->visits[k])) {
-		*reason = "workspace was switched to";
-		ws_switch_touch(&m->visits[k]);
-		return (unsigned)k;
-	}
-	if (k == (int)m->n_visits - 1) {
-		*reason = "no recent switch to its workspace";
-		return 0;
-	}
-
-	// A window manager only shows windows of visible workspaces, so this is a switch
-	// the root window didn't tell us about. Either the root window is behind (some
-	// window managers map the new windows first), and this switch comes after the
-	// last one we know. Or the root window is ahead (when switching fast, we may read
-	// it after the next switch is done), and this switch came before it.
-	auto shown = ws_shown(m);
-	k = (int)m->n_visits;
-	if (m->n_visits >= 2 && shown->from_root && ws_switch_is_recent(shown)) {
-		k = (int)m->n_visits - 1;
-	}
-	ws_add_switch(m, (unsigned)k, desktop, w);
-	*reason = "workspace was switched to, the root window did not say so yet";
-	return (unsigned)ws_find_visit(m, name);
+static struct ws_scan_monitor *
+ws_scan_monitor_of(struct ws_scan *scan, const struct ws_client *c) {
+	auto d = c->desktop;
+	return d >= 0 ? ws_scan_monitor(scan, ws_desktop_monitor((unsigned)d)) : NULL;
 }
 
-/// The switch that a window of workspace `desktop` that hides is part of. Like
-/// ws_switch_for_show.
-static unsigned
-ws_switch_for_hide(unsigned desktop, struct ws_monitor **mp, const char **reason) {
-	auto m = *mp = ws_find_monitor(desktop);
-	if (m == NULL) {
-		*reason = "nothing known about its monitor";
-		return 0;
+/// Take a read: the managed windows are in wsd.clients, those of the read before in
+/// `prev`, and `events` are the maps, unmaps and current desktop changes between the two,
+/// in order. Record the switches on every monitor, and which switch each window's show
+/// and hide is part of.
+void ws_reconcile(struct ws_client *prev, unsigned n_prev, struct ws_event *events,
+                  unsigned n_events, int64_t prev_current) {
+	struct ws_scan scan = {0};
+	scan.clients = calloc(wsd.n_clients + 1, sizeof(*scan.clients));
+	if (scan.clients == NULL) {
+		abort();
 	}
-	// Find the latest switch away from this workspace.
-	for (unsigned k = m->n_visits - 1; k >= 1; k--) {
-		if (strcmp(m->visits[k - 1].name, wsd.names[desktop]) != 0) {
+	for (unsigned i = 0; i < wsd.n_clients; i++) {
+		auto c = &wsd.clients[i];
+		scan.clients[i].unmapped_at = -1;
+		for (unsigned j = 0; j < n_prev; j++) {
+			if (prev[j].id == c->id) {
+				scan.clients[i] =
+				    (struct ws_scan_client){.existed = true,
+				                            .viewable = prev[j].viewable,
+				                            .unmapped_at = -1};
+				c->pending_show = prev[j].pending_show;
+				c->pending_hide = prev[j].pending_hide;
+				c->last_show = prev[j].last_show;
+				c->last_hide = prev[j].last_hide;
+				c->along = prev[j].along;
+				break;
+			}
+		}
+	}
+
+	// Forget the monitors that are gone, and their switches. The whole screen is one
+	// while no desktop is on a monitor of its own.
+	for (unsigned i = 0; i < wsd.n_tracked;) {
+		auto m = &wsd.tracked[i];
+		auto index = ws_monitor_of_name(m->name);
+		bool used = index != -1 || wsd.n_names == 0;
+		for (unsigned d = 0; d < wsd.n_names && !used; d++) {
+			used = ws_desktop_monitor(d) == -1;
+		}
+		if (index == -2 || !used) {
+			ws_log("Monitor %u is gone, forgetting its switches",
+			       (unsigned)m->name);
+			ws_free_monitor(m);
+			wsd.tracked[i] = wsd.tracked[--wsd.n_tracked];
+		} else {
+			i++;
+		}
+	}
+	for (unsigned d = 0; d < wsd.n_names; d++) {
+		auto index = ws_desktop_monitor(d);
+		if (ws_scan_monitor(&scan, index) != NULL) {
 			continue;
 		}
-		if (!ws_switch_is_recent(&m->visits[k])) {
-			break;
+		auto m = ws_get_monitor(index);
+		if (m == NULL) {
+			continue;
 		}
-		*reason = "workspace was switched away from";
-		ws_switch_touch(&m->visits[k]);
-		return k;
+		scan.monitors[scan.n_monitors++] = (struct ws_scan_monitor){
+		    .m = m,
+		    .index = index,
+		    .before = m->list,
+		    .n_before = m->n_list,
+		    .last_switch_at = -1,
+		};
 	}
-	*reason = "no recent switch away from its workspace";
-	return 0;
-}
 
-/// The switch that any other animation of a window of workspace `desktop` is part of: the
-/// latest switch on its monitor, if it is recent. Like ws_switch_for_show.
-static unsigned
-ws_switch_latest(unsigned desktop, struct ws_monitor **mp, const char **reason) {
-	auto m = *mp = ws_find_monitor(desktop);
-	if (m == NULL) {
-		*reason = "nothing known about its monitor";
-		return 0;
+	int last_current = -1;
+	for (unsigned i = 0; i < n_events; i++) {
+		if (events[i].type == WS_EVENT_CURRENT) {
+			last_current = (int)i;
+		}
 	}
-	auto k = m->n_visits - 1;
-	if (k == 0 || !ws_switch_is_recent(&m->visits[k])) {
-		*reason = "no recent switch on its monitor";
-		return 0;
+	const char *current =
+	    wsd.current >= 0 && wsd.current < wsd.n_names ? wsd.names[wsd.current] : NULL;
+	auto current_monitor =
+	    current != NULL
+	        ? ws_scan_monitor(&scan, ws_desktop_monitor((unsigned)wsd.current))
+	        : NULL;
+
+	for (unsigned i = 0; i < n_events; i++) {
+		auto e = &events[i];
+		if (e->type == WS_EVENT_CURRENT) {
+			// Only the last change tells where it went: we read the value
+			// once.
+			if ((int)i == last_current && current_monitor != NULL) {
+				ws_saw_shown(&scan, current_monitor, current, (int)i,
+				             "the root window");
+			}
+			continue;
+		}
+		int k = -1;
+		for (unsigned j = 0; j < wsd.n_clients && k < 0; j++) {
+			k = wsd.clients[j].frame == e->window ? (int)j : -1;
+		}
+		if (k < 0) {
+			// A window that is gone, or that the window manager doesn't
+			// manage.
+			continue;
+		}
+		auto c = &wsd.clients[k];
+		auto sc = &scan.clients[k];
+		if (e->type == WS_EVENT_MAP) {
+			auto sm = ws_scan_monitor_of(&scan, c);
+			if (sm != NULL) {
+				char source[48];
+				snprintf(source, sizeof(source), "a map of window %#010x",
+				         c->id);
+				ws_saw_shown(&scan, sm, c->workspace, (int)i, source);
+			}
+			sc->viewable = true;
+			c->last_show = c->pending_show;
+			c->pending_show = 0;
+			ws_realize(c->last_show);
+		} else {
+			sc->viewable = false;
+			c->last_hide = c->pending_hide;
+			c->pending_hide = 0;
+			ws_realize(c->last_hide);
+			sc->unmapped_at = c->last_hide == 0 ? (int)i : -1;
+		}
 	}
-	*reason = "started during a switch on its monitor";
-	ws_switch_touch(&m->visits[k]);
-	return k;
+	if (last_current < 0 && wsd.current != prev_current && current_monitor != NULL) {
+		ws_saw_shown(&scan, current_monitor, current, (int)n_events, "the root window");
+	}
+	for (unsigned i = 0; i < scan.n_monitors; i++) {
+		auto sm = &scan.monitors[i];
+		auto shown = ws_read_shown(sm);
+		if (shown != NULL) {
+			ws_saw_shown(&scan, sm, shown, (int)n_events, "the windows on screen");
+		} else if (sm->m->shown != NULL && ws_find_desktop(sm->m->shown) < 0) {
+			auto r = ws_monitor_rect(sm->index);
+			ws_log("Monitor at %d,%d: \"%s\", which it showed, is gone, and "
+			       "we "
+			       "can't tell which workspace it shows",
+			       r.x1, r.y1, sm->m->shown);
+		}
+	}
+	// A change no event told us about, for windows of a read whose events we missed.
+	for (unsigned i = 0; i < wsd.n_clients; i++) {
+		auto c = &wsd.clients[i];
+		auto sc = &scan.clients[i];
+		if (sc->existed && sc->viewable != c->viewable) {
+			if (c->viewable) {
+				c->last_show = c->pending_show;
+				c->pending_show = 0;
+				ws_realize(c->last_show);
+			} else {
+				c->last_hide = c->pending_hide;
+				c->pending_hide = 0;
+				ws_realize(c->last_hide);
+			}
+		}
+	}
+
+	for (unsigned i = 0; i < scan.n_monitors; i++) {
+		auto sm = &scan.monitors[i];
+		const char *list[WS_MAX_DESKTOPS];
+		auto n = ws_monitor_list(sm->index, list);
+		ws_free_list(sm->m->list, sm->m->n_list);
+		sm->m->list = ws_copy_list(list, n);
+		sm->m->n_list = n;
+	}
+	free(scan.clients);
 }
 
 /// Whether picom fires `trigger` for a change of the window itself. Such an animation is
@@ -354,6 +557,10 @@ static bool ws_is_own_change(const char *trigger) {
 		}
 	}
 	return false;
+}
+
+static bool ws_is_ours(const char *trigger) {
+	return strcmp(trigger, WS_PASS_TRIGGER) == 0;
 }
 
 /// Read where a window is, with its border, in a round trip of its own. Returns false if
@@ -373,46 +580,42 @@ static bool ws_window_rect(xcb_window_t w, struct ws_rect *r) {
 	return true;
 }
 
-/// Where a window is, for a window that starts an animation: on which desktop (-1 if it
-/// is not on one workspace), its place, and the index of its monitor (-1 for the whole
-/// screen). Nothing is known about a window that closes.
-struct ws_place {
-	int64_t desktop;
-	struct ws_rect rect;
-	int monitor;
-};
-
-static struct ws_place
-ws_place_of(const struct picom_animation_start *start, xcb_window_t client, bool gone) {
-	struct ws_place ret = {.desktop = -1, .rect = wsd.screen, .monitor = -1};
-	if (gone) {
-		return ret;
+/// Start `trigger` on window `w`, and remember why: for monitor `m` and its switches
+/// `first` to `last` (0 for none). Returns whether picom started it.
+bool ws_start(xcb_window_t w, const char *trigger, const struct ws_monitor *m,
+              uint64_t first, uint64_t last) {
+	if (wsd.starts_frame != wsd.frame) {
+		wsd.starts_frame = wsd.frame;
+		wsd.n_starts = 0;
 	}
-	auto c = ws_find_client(client);
-	if (c != NULL) {
-		ret.desktop = c->desktop;
-		ret.rect = c->rect;
-	} else if (!ws_window_rect(start->window, &ret.rect)) {
-		return ret;
+	if (!wsd.api->start_animation(w, trigger)) {
+		return false;
 	}
-	ret.monitor = ret.desktop >= 0 ? ws_desktop_monitor((unsigned)ret.desktop)
-	                               : ws_rect_monitor(ret.rect);
-	return ret;
+	wsd.starts = ws_grow(wsd.starts, wsd.n_starts + 1, sizeof(*wsd.starts));
+	wsd.starts[wsd.n_starts++] = (struct ws_start){
+	    .window = w,
+	    .trigger = trigger,
+	    .monitor = m != NULL ? m->name : XCB_NONE,
+	    .first = first,
+	    .last = last,
+	};
+	return true;
 }
 
-/// The face of a window of workspace `desktop` on the monitor with index `index`. The
-/// reference workspace is the one `m` showed before the switch to `m->visits[k]`, or the
-/// one it shows now if `k` is 0.
-int ws_face(unsigned desktop, int index, struct ws_monitor *m, unsigned k) {
-	auto order = ws_order_of(wsd.names[desktop], desktop);
-	auto reference = order;
-	if (k > 0) {
-		reference = m->visits[k - 1].order;
-	} else if (m != NULL) {
-		reference = ws_shown(m)->order;
+/// Why we started `trigger` on window `window` or `client` in this pass, or NULL.
+static const struct ws_start *
+ws_find_start(uint64_t frame, xcb_window_t window, xcb_window_t client, const char *trigger) {
+	if (frame != wsd.starts_frame) {
+		return NULL;
 	}
-	auto steps = ws_steps(reference, order, index);
-	return steps.direction * (int)steps.distance;
+	for (unsigned i = 0; i < wsd.n_starts; i++) {
+		auto s = &wsd.starts[i];
+		if ((s->window == window || s->window == client) &&
+		    strcmp(s->trigger, trigger) == 0) {
+			return s;
+		}
+	}
+	return NULL;
 }
 
 /// The name of a window, for the log.
@@ -441,48 +644,92 @@ void ws_compute(const struct picom_animation_start *start,
 	// A window that closes is gone (destroyed, or reparented away). There is nothing
 	// to ask about it.
 	bool gone = strcmp(start->trigger, "close") == 0;
+	// picom may not know the client window of a frame yet.
 	xcb_window_t client = start->client != XCB_NONE ? start->client : start->window;
 
 	// The windows that start in the same pass share one read.
-	if (start->frame != wsd.read_frame) {
+	if (!gone && start->frame != wsd.read_frame) {
 		ws_read();
 	}
 
-	auto place = ws_place_of(start, client, gone);
-	auto desktop = place.desktop;
-	auto monitor_rect = ws_monitor_rect(place.monitor);
-
-	struct ws_monitor *m = NULL;
-	unsigned k = 0;
-	const char *reason;
-	if (desktop < 0) {
-		reason = gone ? "window is gone" : "window is not on one workspace";
-	} else if (show) {
-		k = ws_switch_for_show(client, (unsigned)desktop, &m, &reason);
-	} else if (hide) {
-		k = ws_switch_for_hide((unsigned)desktop, &m, &reason);
-	} else if (ws_is_own_change(start->trigger)) {
-		m = ws_find_monitor((unsigned)desktop);
-		reason = "a change of the window itself";
-	} else {
-		k = ws_switch_latest((unsigned)desktop, &m, &reason);
+	auto c = gone ? NULL : ws_find_client(client);
+	if (c == NULL && !gone) {
+		c = ws_find_client_by_frame(start->window);
 	}
-	auto move = k > 0 ? ws_switch_move(m, k) : (struct ws_move){0};
+	int64_t desktop = c != NULL ? c->desktop : -1;
+	struct ws_rect rect = wsd.screen;
+	bool known = gone ? false : c != NULL || ws_window_rect(start->window, &rect);
+	if (c != NULL) {
+		rect = c->rect;
+	}
+	int monitor = desktop >= 0 ? ws_desktop_monitor((unsigned)desktop)
+	              : known      ? ws_rect_monitor(rect)
+	                           : -1;
+	auto own = !gone && ws_is_ours(start->trigger)
+	               ? ws_find_start(start->frame, start->window, client, start->trigger)
+	               : NULL;
+	auto monitor_rect = ws_monitor_rect(monitor);
+	auto m = ws_find_monitor(monitor);
+	const char *workspace = desktop >= 0 ? wsd.names[desktop] : NULL;
 
+	const struct ws_switch *first = NULL, *last = NULL;
+	const char *reason;
+	if (gone) {
+		reason = "window is gone";
+	} else if (desktop < 0) {
+		reason = "window is not on one workspace";
+	} else if (show || hide) {
+		last = ws_find_switch(m, show ? c->last_show : c->last_hide);
+		first = last != NULL ? ws_find_switch(m, last->start) : NULL;
+		first = first != NULL ? first : last;
+		reason = last == NULL ? "not part of a switch"
+		         : show       ? "workspace was switched to"
+		                      : "workspace was switched away from";
+	} else if (ws_is_own_change(start->trigger)) {
+		reason = "a change of the window itself";
+	} else if (ws_is_ours(start->trigger)) {
+		if (own != NULL) {
+			auto ms = ws_find_monitor(ws_monitor_of_name(own->monitor));
+			first = ws_find_switch(ms, own->first);
+			last = ws_find_switch(ms, own->last);
+		}
+		reason = own == NULL    ? "not started by the plugin"
+		         : last == NULL ? "started by the plugin, not for a switch"
+		                        : "started by the plugin for a switch";
+	} else {
+		reason = "not started by the plugin";
+	}
+	if (first == NULL || last == NULL) {
+		first = last = NULL;
+	}
+
+	const char *list[WS_MAX_DESKTOPS];
+	auto n = ws_monitor_list(monitor, list);
+	auto shown = m != NULL ? ws_list_find(list, n, m->shown) : -1;
+	if (desktop >= 0 && shown < 0) {
+		ws_log("Monitor at %d,%d: we don't know which of its workspaces it shows",
+		       monitor_rect.x1, monitor_rect.y1);
+	}
+	struct ws_move move = {0};
 	int face = 0;
+	if (desktop >= 0 && last != NULL) {
+		const char *span[2 * WS_MAX_DESKTOPS];
+		auto n_span = ws_span_list(first, last, span);
+		move = ws_steps(first->from, last->to, span, n_span);
+		auto steps = ws_steps(first->from, workspace, span, n_span);
+		face = steps.direction * (int)steps.distance;
+	} else if (desktop >= 0 && shown >= 0) {
+		auto steps = ws_steps(m->shown, workspace, list, n);
+		face = steps.direction * (int)steps.distance;
+	}
 	bool placed = true;
 	if (desktop >= 0) {
-		face = ws_face((unsigned)desktop, place.monitor, m, k);
-		auto r = place.rect;
-		placed = ws_rect_has_point(monitor_rect, r.x1 + (r.x2 - r.x1) / 2,
-		                           r.y1 + (r.y2 - r.y1) / 2);
+		placed = ws_rect_has_point(monitor_rect, rect.x1 + (rect.x2 - rect.x1) / 2,
+		                           rect.y1 + (rect.y2 - rect.y1) / 2);
 	}
-	unsigned faces = 0;
-	for (unsigned d = 0; d < wsd.n_names; d++) {
-		faces += ws_desktop_monitor(d) == place.monitor;
-	}
+	auto faces = known ? n : 0;
 	bool selected = wsd.current >= 0 && wsd.current < wsd.n_names &&
-	                ws_desktop_monitor((unsigned)wsd.current) == place.monitor;
+	                ws_desktop_monitor((unsigned)wsd.current) == monitor;
 
 	values[WS_VAR_DIRECTION] = move.direction;
 	values[WS_VAR_DISTANCE] = move.distance;
@@ -499,7 +746,7 @@ void ws_compute(const struct picom_animation_start *start,
 		// Measured before the name lookup, which only the log needs.
 		auto took = ws_now_us() - now;
 		auto waits = wsd.n_waits;
-		char *name = ws_window_name(client);
+		char *name = gone ? strdup("") : ws_window_name(client);
 		ws_log("%s of window %#010x (%s): direction = %d (%s), "
 		       "distance %u, face %d of %u, selected %d, placed %d, "
 		       "monitor %d,%d %dx%d, %llu us, %u waits for X, pass %llu",
@@ -512,56 +759,57 @@ void ws_compute(const struct picom_animation_start *start,
 	}
 }
 
-/// The latest switch on monitor `m`, if it is recent and we didn't start ws-pass for it
-/// yet. Returns `k` for the switch to `m->visits[k]`, or 0.
-unsigned ws_unstarted_switch(const struct ws_monitor *m) {
-	auto k = m->n_visits - 1;
-	if (k == 0 || m->visits[k].passes_started || !ws_switch_is_recent(&m->visits[k])) {
-		return 0;
-	}
-	return k;
-}
-
-/// Whether a window of desktop `desktop` is part of the switch to `m->visits[k]`: it is
-/// on the workspace switched away from, on the one switched to, or on any other workspace
-/// of the monitor.
-static bool ws_in_switch(const struct ws_monitor *m, unsigned k, unsigned desktop) {
-	auto name = wsd.names[desktop];
-	auto index = ws_monitor_index(m->has_viewport, m->viewport_x, m->viewport_y);
-	return strcmp(name, m->visits[k - 1].name) == 0 ||
-	       strcmp(name, m->visits[k].name) == 0 || ws_desktop_monitor(desktop) == index;
-}
-
-/// Start ws-pass on all windows of a switch, once per switch, for the latest switch on
-/// each monitor. The window manager may hide and show the windows of the two workspaces
-/// of the switch over more than one pass; this way they all start together. All windows
-/// of the monitor take part, also those of workspaces the switch doesn't reach: when a
-/// switch comes while the last one still runs, every window of the monitor is then in
-/// the same animation, and a style can carry their positions over. A window that moved
-/// to another workspace together with the switch stays on screen, so it is left out.
+/// Start ws-pass on all windows of the switches we didn't start it for yet, once, on each
+/// monitor: those we saw since we last started it, as one move from where the first one
+/// came from to where the last one went. The window manager may hide and show the
+/// windows of the two workspaces of a switch over more than one pass; this way they all
+/// start together. All windows of the monitor take part, also those of workspaces the
+/// switch doesn't reach: when a switch comes while the last one still runs, every window
+/// of the monitor is then in the same animation, and a style can carry their positions
+/// over. A window that was viewable before the switch and is viewable after it moved
+/// along with it, so it is left out.
 void ws_start_passes(void) {
 	for (unsigned i = 0; i < wsd.n_tracked; i++) {
 		auto m = &wsd.tracked[i];
-		auto k = ws_unstarted_switch(m);
-		if (k == 0) {
+		unsigned k = m->n_switches;
+		while (k > 0 && !m->switches[k - 1].passes_started) {
+			k--;
+			m->switches[k].passes_started = true;
+		}
+		if (k == m->n_switches) {
 			continue;
 		}
-		m->visits[k].passes_started = true;
+		auto first = &m->switches[k];
+		auto last = &m->switches[m->n_switches - 1];
+		if (strcmp(first->from, last->to) == 0) {
+			ws_log("Switches \"%s\" -> ... -> \"%s\" went back where they "
+			       "came "
+			       "from, starting nothing",
+			       first->from, last->to);
+			continue;
+		}
+		auto index = ws_monitor_of_name(m->name);
 		unsigned members = 0, started = 0;
 		for (unsigned j = 0; j < wsd.n_clients; j++) {
 			auto c = &wsd.clients[j];
-			if (c->desktop < 0 || c->moved ||
-			    !ws_in_switch(m, k, (unsigned)c->desktop)) {
+			bool in = c->workspace != NULL &&
+			          (ws_desktop_monitor((unsigned)c->desktop) == index ||
+			           strcmp(c->workspace, first->from) == 0 ||
+			           strcmp(c->workspace, last->to) == 0);
+			bool along = c->viewable && c->along >= first->id &&
+			             c->workspace != NULL &&
+			             strcmp(c->workspace, last->to) == 0;
+			if (!in || along) {
 				continue;
 			}
 			members++;
-			started += wsd.api->start_animation(c->id, WS_PASS_TRIGGER);
+			started += ws_start(c->id, WS_PASS_TRIGGER, m, first->id, last->id);
 		}
 		if (members > 0) {
 			ws_log("Switch \"%s\" -> \"%s\" has %u windows, "
 			       "started %s on %u (in pass %llu)",
-			       m->visits[k - 1].name, m->visits[k].name, members,
-			       WS_PASS_TRIGGER, started, (unsigned long long)wsd.frame);
+			       first->from, last->to, members, WS_PASS_TRIGGER, started,
+			       (unsigned long long)wsd.frame);
 		}
 	}
 }
