@@ -463,11 +463,15 @@ static bool ws_is_toplevel(xcb_window_t w) {
 }
 
 /// The top-level window that holds window `w`, whose parent is `parent`: `w` itself, or
-/// the frame the window manager put it in. Most window managers use one frame; for more,
-/// we go up the tree, one round trip per step.
+/// the frame the window manager put it in. Most window managers use one frame, a
+/// top-level window we read already; for more, we go up the tree, one round trip per
+/// step.
 static xcb_window_t ws_toplevel_of(xcb_window_t w, xcb_window_t parent) {
 	while (parent != XCB_NONE && parent != wsd.root && !ws_is_toplevel(w)) {
 		w = parent;
+		if (ws_is_toplevel(w)) {
+			break;
+		}
 		auto tree = xcb_query_tree_reply(wsd.c, xcb_query_tree(wsd.c, w), NULL);
 		parent = tree != NULL ? tree->parent : XCB_NONE;
 		free(tree);
