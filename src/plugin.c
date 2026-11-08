@@ -6,9 +6,9 @@
 /// crop to it, and where the window's workspace is among the monitor's workspaces, so
 /// they can draw the workspaces a switch passes. Its animation variables are
 /// plugin-ws-direction-direction, -distance, -monitor-x, -monitor-y, -monitor-width,
-/// -monitor-height, -faces, -face, -selected, -placed, -index, -shown, -unfolded and
-/// -backdrop (enum ws_variable). The README, under Reference, and the man page say what
-/// each one is.
+/// -monitor-height, -faces, -face, -selected, -placed, -index, -shown, -unfolded,
+/// -monitor-width-mm, -monitor-height-mm and -backdrop (enum ws_variable). The README,
+/// under Reference, and the man page say what each one is.
 ///
 /// A window is on one workspace if the window manager lists it in _NET_CLIENT_LIST, its
 /// _NET_WM_DESKTOP names one desktop, and it doesn't have _NET_WM_STATE_HIDDEN (i3 sets
@@ -80,6 +80,8 @@ static const char *const ws_variable_names[] = {
     [WS_VAR_INDEX] = "index",
     [WS_VAR_SHOWN] = "shown",
     [WS_VAR_UNFOLDED] = "unfolded",
+    [WS_VAR_MONITOR_WIDTH_MM] = "monitor-width-mm",
+    [WS_VAR_MONITOR_HEIGHT_MM] = "monitor-height-mm",
     [WS_VAR_BACKDROP] = "backdrop",
 };
 static_assert(sizeof(ws_variable_names) / sizeof(ws_variable_names[0]) == WS_N_VARIABLES,
@@ -353,6 +355,7 @@ __attribute__((constructor)) static void ws_init(void) {
 		return;
 	}
 	wsd.root = it.data->root;
+	wsd.screen_width_mm = it.data->width_in_millimeters;
 	// Warm follows what windows draw.
 	auto damage = xcb_get_extension_data(wsd.c, &xcb_damage_id);
 	auto xfixes = xcb_get_extension_data(wsd.c, &xcb_xfixes_id);
@@ -365,6 +368,7 @@ __attribute__((constructor)) static void ws_init(void) {
 	}
 	free(xcb_xfixes_query_version_reply(wsd.c, xcb_xfixes_query_version(wsd.c, 2, 0), NULL));
 	free(xcb_damage_query_version_reply(wsd.c, xcb_damage_query_version(wsd.c, 1, 1), NULL));
+	wsd.screen_height_mm = it.data->height_in_millimeters;
 	wsd.a_current_desktop = ws_atom("_NET_CURRENT_DESKTOP");
 	wsd.a_desktop_names = ws_atom("_NET_DESKTOP_NAMES");
 	wsd.a_desktop_viewport = ws_atom("_NET_DESKTOP_VIEWPORT");

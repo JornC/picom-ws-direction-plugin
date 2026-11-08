@@ -11,16 +11,18 @@ Upgrading from the unversioned plugin on `main`:
 - picom's `hook-v2` branch, with plugin API 0.2, can't load it. The picom fork can.
 - The variables it had, `direction`, `monitor-x`, `monitor-y`, `monitor-width` and
   `monitor-height`, keep their names and meaning. `distance`, `faces`, `face`,
-  `selected`, `placed`, `index`, `shown`, `unfolded` and `backdrop` are new.
+  `selected`, `placed`, `index`, `shown`, `unfolded`, `monitor-width-mm`,
+  `monitor-height-mm` and `backdrop` are new.
 - `make install` now also installs the command, `ws-direction`, and its man page.
 - The `WS_DIRECTION_LOG` line for an animation says `direction = N` where it said
   `workspace-direction = N`; change what greps for it.
 
 Variables:
 
-- Fourteen animation variables: `direction`, `distance`, `monitor-x`, `monitor-y`,
+- Sixteen animation variables: `direction`, `distance`, `monitor-x`, `monitor-y`,
   `monitor-width`, `monitor-height`, `faces`, `face`, `selected`, `placed`, `index`,
-  `shown`, `unfolded` and `backdrop`, all under `plugin-ws-direction-`.
+  `shown`, `unfolded`, `monitor-width-mm`, `monitor-height-mm` and `backdrop`, all under
+  `plugin-ws-direction-`.
 - They don't depend on the order in which the window manager changes its properties and
   maps or unmaps windows, nor on how long it takes: the plugin follows the maps and
   unmaps on its own connection, and a show or hide is part of a switch when the window

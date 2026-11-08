@@ -98,6 +98,8 @@ void fx_reset(void) {
 	wsd = (struct ws_state){
 	    .api = &fake_api,
 	    .screen = {.x2 = 4520, .y2 = 1920},
+	    .screen_width_mm = 1196,
+	    .screen_height_mm = 508,
 	    .current = -1,
 	    .frame = 1,
 	    .frame_time_us = 1000000,
@@ -113,8 +115,12 @@ void fx_reset(void) {
 }
 
 int fx_monitor(struct ws_rect r) {
-	wsd.monitors[wsd.n_monitors] =
-	    (struct ws_output){.name = wsd.n_monitors + 1, .rect = r};
+	wsd.monitors[wsd.n_monitors] = (struct ws_output){
+	    .name = wsd.n_monitors + 1,
+	    .rect = r,
+	    .width_mm = (uint32_t)(r.x2 - r.x1) / 4,
+	    .height_mm = (uint32_t)(r.y2 - r.y1) / 4,
+	};
 	auto ret = wsd.n_monitors++;
 	ws_update_viewport_monitors();
 	return ret;
@@ -266,6 +272,8 @@ static struct fx_values compute(struct picom_animation_start start) {
 	    .index = v[WS_VAR_INDEX],
 	    .shown = v[WS_VAR_SHOWN],
 	    .unfolded = v[WS_VAR_UNFOLDED],
+	    .width_mm = v[WS_VAR_MONITOR_WIDTH_MM],
+	    .height_mm = v[WS_VAR_MONITOR_HEIGHT_MM],
 	    .backdrop = v[WS_VAR_BACKDROP],
 	};
 }

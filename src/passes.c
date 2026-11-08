@@ -710,7 +710,8 @@ void ws_compute(const struct picom_animation_start *start,
 			monitor = ws_monitor_of_name(own->monitor);
 		}
 	}
-	auto monitor_rect = ws_monitor_rect(monitor);
+	auto info = ws_monitor_info(monitor);
+	auto monitor_rect = info.rect;
 	auto m = ws_find_monitor(monitor);
 	const char *workspace = desktop >= 0 ? wsd.names[desktop] : NULL;
 
@@ -795,6 +796,8 @@ void ws_compute(const struct picom_animation_start *start,
 	values[WS_VAR_INDEX] = index;
 	values[WS_VAR_SHOWN] = shown;
 	values[WS_VAR_UNFOLDED] = unfolded;
+	values[WS_VAR_MONITOR_WIDTH_MM] = info.width_mm;
+	values[WS_VAR_MONITOR_HEIGHT_MM] = info.height_mm;
 	values[WS_VAR_BACKDROP] = backdrop != NULL;
 
 	if (wsd.log != NULL) {
@@ -804,13 +807,14 @@ void ws_compute(const struct picom_animation_start *start,
 		char *name = gone ? strdup("") : ws_window_name(client);
 		ws_log("%s of window %#010x (%s): direction = %d (%s), "
 		       "distance %u, face %d of %u, selected %d, placed %d, "
-		       "monitor %d,%d %dx%d, index %d, shown %d, unfolded %d, "
+		       "monitor %d,%d %dx%d, %ux%u mm, index %d, shown %d, unfolded %d, "
 		       "%llu us, %u waits for X, pass %llu",
 		       start->trigger, start->window, name, move.direction, reason,
 		       move.distance, face, faces, selected, placed, monitor_rect.x1,
 		       monitor_rect.y1, monitor_rect.x2 - monitor_rect.x1,
-		       monitor_rect.y2 - monitor_rect.y1, index, shown, unfolded,
-		       (unsigned long long)took, waits, (unsigned long long)start->frame);
+		       monitor_rect.y2 - monitor_rect.y1, info.width_mm, info.height_mm,
+		       index, shown, unfolded, (unsigned long long)took, waits,
+		       (unsigned long long)start->frame);
 		free(name);
 	}
 }

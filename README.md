@@ -5,7 +5,7 @@ workspace switch went, and which monitor a window's workspace is on. With it a `
 `hide` animation can move windows the right way and keep them on their monitor. It also
 tells them where a window's workspace is among the monitor's workspaces, for effects
 that draw the workspaces a switch passes. picom itself knows nothing about workspaces:
-the plugin reads the window manager's EWMH properties and hands the scripts fourteen
+the plugin reads the window manager's EWMH properties and hands the scripts sixteen
 numbers. What the scripts do with them is up to you; `styles/` has seven switch styles
 to start from, and the `ws-direction` command opens and closes the overview.
 
@@ -342,6 +342,12 @@ over them.
 
 `plugin-ws-direction-unfolded`
 : 1 while that monitor is unfolded into an overview, else 0.
+
+`plugin-ws-direction-monitor-width-mm`, `plugin-ws-direction-monitor-height-mm`
+: The size of that monitor in millimetres, as RandR gives it (the whole screen's, as
+  the X server gives it, where the monitor rect is the whole screen). 0 if RandR doesn't
+  know. With the monitor's size in pixels, a style can work out how large a pixel is,
+  and so put the eye at the distance the user really sits from the screen.
 
 `plugin-ws-direction-backdrop`
 : 1 for the plugin's backdrop windows (see [Backdrops](#backdrops)), else 0. The plugin

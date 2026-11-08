@@ -34,12 +34,14 @@ extern unsigned test_n_starts;
 /// The variables ws_compute works out for a window, by name.
 struct fx_values {
 	double direction, distance, x, y, width, height, faces, face, selected, placed,
-	    index, shown, unfolded, backdrop;
+	    index, shown, unfolded, width_mm, height_mm, backdrop;
 };
 
-/// Forget everything: no monitors, workspaces or windows, a screen of 4520x1920.
+/// Forget everything: no monitors, workspaces or windows, a screen of 4520x1920 pixels
+/// and 1196x508 mm.
 void fx_reset(void);
-/// Add a monitor. Its RandR name is its index plus 1. Returns its index.
+/// Add a monitor. Its RandR name is its index plus 1, and it has 4 pixels per mm.
+/// Returns its index.
 int fx_monitor(struct ws_rect r);
 /// Add a workspace on monitor `monitor`, with the monitor's corner as its viewport.
 /// Returns its desktop.

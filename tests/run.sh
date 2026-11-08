@@ -620,7 +620,24 @@ variables "  (faces: 1 leaves from face 0, 4 arrives from face 2 of DPT's 6)" \
 	"ws1-b hide direction 1 distance 2 face 0/6 selected 1 placed 1 $DPT_RECT" \
 	"ws4-a show direction 1 distance 2 face 2/6 selected 1 placed 1 $DPT_RECT"
 i3_case "DPT 4->1" 'workspace 1:IDE' "ws4-a hide -1" "ws1-a show -1" "ws1-b show -1"
+# xrandr --setmonitor above gave DPT 800x337 mm and HDT 300x530 mm.
+mm=$(tail -n +"$((CASE_MARK + 1))" "$LOG" |
+	sed -nE 's/.*\] (show|hide) of window 0x[0-9a-f]+ \((ws1-a|ws4-a)\): .*, ([0-9]+x[0-9]+) mm, .*/\2 \3/p' |
+	sort -u | tr '\n' ' ')
+if [[ $mm == "ws1-a 800x337 ws4-a 800x337 " ]]; then
+	pass "  (DPT's size in millimetres, from RandR: 800x337)"
+else
+	fail "  (DPT's size in millimetres, from RandR: 800x337)" "got: ${mm:-nothing}"
+fi
 i3_case "HDT 3->5" 'workspace 5:Music' "ws3-a hide 1" "ws5-a show 1"
+mm=$(tail -n +"$((CASE_MARK + 1))" "$LOG" |
+	sed -nE 's/.*\] (show|hide) of window 0x[0-9a-f]+ \((ws3-a|ws5-a)\): .*, ([0-9]+x[0-9]+) mm, .*/\3/p' |
+	sort -u | tr '\n' ' ')
+if [[ $mm == "300x530 " ]]; then
+	pass "  (HDT's size in millimetres: 300x530)"
+else
+	fail "  (HDT's size in millimetres: 300x530)" "got: ${mm:-nothing}"
+fi
 distances "  (distance 1: 4 is on DPT)" "ws3-a hide 1" "ws5-a show 1"
 i3_case "HDT 5->3" 'workspace 3:Term' "ws5-a hide -1" "ws3-a show -1"
 i3_case "focus moves to the other monitor by switching to its visible workspace" \
@@ -944,8 +961,9 @@ sleep "$SETTLE"
 mark=$(log_mark)
 stop "$LAST_PID"
 sleep "$SETTLE"
-closed=$(tail -n +"$((mark + 1))" "$LOG" | grep -E 'close of window 0x[0-9a-f]+ \(\): direction = 0 ' |
-	sed -nE 's/.*face (-?[0-9]+ of [0-9]+).*(monitor [0-9]+,[0-9]+ [0-9]+x[0-9]+), index ([0-9]+).*/\1 \2 index \3/p')
+closed=$(tail -n +"$((mark + 1))" "$LOG" | grep -E '(close|hide) of window 0x[0-9a-f]+ \((close-a)?\): direction = 0 ' |
+	sed -nE 's/.*face (-?[0-9]+ of [0-9]+).*(monitor [0-9]+,[0-9]+ [0-9]+x[0-9]+),.* index ([0-9]+),.*/\1 \2 index \3/p' |
+	head -n 1)
 if [[ $closed == "0 of 6 $DPT_RECT index 0" ]]; then
 	pass "a window that closes on DPT's 1:IDE gets DPT ($closed)"
 else

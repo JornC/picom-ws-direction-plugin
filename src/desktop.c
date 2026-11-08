@@ -153,6 +153,16 @@ struct ws_rect ws_monitor_rect(int index) {
 	return index >= 0 ? wsd.monitors[index].rect : wsd.screen;
 }
 
+/// A monitor, the whole screen for -1.
+struct ws_output ws_monitor_info(int index) {
+	if (index >= 0) {
+		return wsd.monitors[index];
+	}
+	return (struct ws_output){.rect = wsd.screen,
+	                          .width_mm = wsd.screen_width_mm,
+	                          .height_mm = wsd.screen_height_mm};
+}
+
 /// Ask for _NET_WM_DESKTOP of a window. Pair with ws_window_desktop_reply.
 static xcb_get_property_cookie_t ws_window_desktop_request(xcb_window_t w) {
 	return ws_prop_request(w, wsd.a_wm_desktop, XCB_ATOM_CARDINAL, 1);
@@ -434,6 +444,8 @@ static void ws_take_root(void) {
 			             .y1 = it.data->y,
 			             .x2 = it.data->x + it.data->width,
 			             .y2 = it.data->y + it.data->height},
+			    .width_mm = it.data->width_in_millimeters,
+			    .height_mm = it.data->height_in_millimeters,
 			};
 		}
 		free(monitors);

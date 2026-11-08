@@ -56,6 +56,8 @@ enum ws_variable {
 	WS_VAR_INDEX,
 	WS_VAR_SHOWN,
 	WS_VAR_UNFOLDED,
+	WS_VAR_MONITOR_WIDTH_MM,
+	WS_VAR_MONITOR_HEIGHT_MM,
 	WS_VAR_BACKDROP,
 	WS_N_VARIABLES,
 };
@@ -71,10 +73,12 @@ struct ws_rect {
 	int32_t x1, y1, x2, y2;
 };
 
-/// A monitor, as RandR gives it.
+/// A monitor, as RandR gives it: its name, where it is, and how large it is in
+/// millimetres (0 if RandR doesn't know).
 struct ws_output {
 	xcb_atom_t name;
 	struct ws_rect rect;
+	uint32_t width_mm, height_mm;
 };
 
 /// A workspace switch as a window sees it: which way it went, and how many workspaces of
@@ -233,6 +237,8 @@ struct ws_state {
 	    a_utf8_string, a_net_wm_name, a_client_list, a_wm_state, a_wm_state_hidden,
 	    a_command, a_answer, a_active_window, a_warm;
 	struct ws_rect screen;
+	/// The screen's size in millimetres, as the X server says.
+	uint32_t screen_width_mm, screen_height_mm;
 	FILE *log;
 
 	/// The pass picom is in (UINT64_MAX before the first one), and when it started.
@@ -398,6 +404,7 @@ void ws_update_viewport_monitors(void);
 int ws_desktop_monitor(unsigned desktop);
 int ws_monitor_of_name(xcb_atom_t name);
 struct ws_rect ws_monitor_rect(int index);
+struct ws_output ws_monitor_info(int index);
 const struct ws_client *ws_find_client(xcb_window_t id);
 const struct ws_client *ws_find_client_by_frame(xcb_window_t frame);
 void ws_keep_gone(struct ws_client *prev, unsigned n_prev);

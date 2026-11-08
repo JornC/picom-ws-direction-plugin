@@ -62,6 +62,21 @@ TEST(variables_show_in_a_switch) {
 	CHECK_INT(v.unfolded, 0);
 }
 
+TEST(variables_monitor_size_in_mm) {
+	two_monitors();
+	auto landscape = fx_compute(0x101, "size");
+	CHECK_INT(landscape.width_mm, 860);
+	CHECK_INT(landscape.height_mm, 360);
+	auto portrait = fx_compute(0x105, "size");
+	CHECK_INT(portrait.width_mm, 270);
+	CHECK_INT(portrait.height_mm, 480);
+	// A window across both monitors: the whole screen.
+	fx_window(0x200, -1, (struct ws_rect){.x1 = 3000, .y1 = 500, .x2 = 3600, .y2 = 600});
+	auto across = fx_compute(0x200, "size");
+	CHECK_INT(across.width_mm, 1196);
+	CHECK_INT(across.height_mm, 508);
+}
+
 TEST(variables_hide_in_a_switch) {
 	switch_1_to_3();
 	auto v = fx_compute(0x101, "hide");
