@@ -26,15 +26,21 @@
 # (StartAnimations) on an xterm of a hidden workspace, and checks a screenshot shows it
 # while the animation runs, and that started right after a switch on the xterms of the
 # workspaces in between, it is still part of no switch: the plugin didn't start it. Then
-# it checks that the plugin itself starts the custom trigger ws-pass on the xterms of the
-# workspaces a switch passes, in the pass of the switch, and takes a screenshot halfway
-# through such a switch. Last it restarts i3 and changes picom's config, which leave picom
-# without images of the hidden workspaces, and checks that the plugin gets them back by
-# itself, with the screen, the keyboard and the pointer frozen, that it puts the pointer
-# back, and that it waits for a window that paints itself late (tests/slowpaint.c). And
-# that "ws-direction warm" gets them back when asked, also at picom's start, and "warm
-# --auto off" stops the plugin from doing it by itself. The harness runs on a D-Bus
-# session bus of its own.
+# it runs picom with styles/pass-slide.conf, slowed down, and checks that the plugin
+# itself starts the custom trigger ws-pass on all xterms of the switch's monitor, in the
+# pass of the switch, and that none of them starts a show or hide on top. Screenshots
+# partway through switches show the xterms of the workspaces passed on the monitor, in
+# order, but not an xterm whose place is still on the other monitor (placed 0), and that a
+# switch made while one runs carries the workspaces on as one strip. Then every style runs
+# as it ships, at its own length, through switches that interrupt each other the same way
+# and the other way, on both monitors, and check-frames.py checks every frame. Last it
+# restarts i3 and changes picom's config, which leave picom without images of the hidden
+# workspaces, and checks that the plugin gets them back by itself, with the screen, the
+# keyboard and the pointer frozen, that it puts the pointer back, and that it waits for a
+# window that paints itself late (tests/slowpaint.c). And that "ws-direction warm" gets
+# them back when asked, also at picom's start, and "warm --auto off" stops the plugin from
+# doing it by itself.
+# The harness runs on a D-Bus session bus of its own.
 #
 # Phase 2: i3 is replaced by fakewm.c, a tiny stand-in window manager. It can spread one
 # workspace switch over several picom frames, and set up cases i3 won't produce on demand
@@ -55,8 +61,6 @@
 # Environment: PICOM (picom binary, default: picom on the PATH; it must have plugin API
 # 0.9, custom animation triggers and PICOM_DEBUG=frame_layout), I3 (default /usr/bin/i3),
 # WSDIR_DISPLAY (default :91), WSDIR_WORK (directory for the i3 socket and logs, default
-# $XDG_RUNTIME_DIR/wsdir-<display number>), WSDIR_SETTLE (seconds to wait after each
-# step, default 0.7), WSDIR_PLUGIN (the plugin, default build/ws-direction.so).
 # $XDG_RUNTIME_DIR/wsdir-<display number>, or /tmp/wsdir-<display number> without
 # XDG_RUNTIME_DIR), WSDIR_SETTLE (seconds to wait after each step, default 0.7),
 # WSDIR_PLUGIN (the plugin, default build/ws-direction.so).
@@ -77,6 +81,7 @@ ROOT=$(cd "$HERE/.." && pwd)
 PICOM=${PICOM:-$(command -v picom)}
 I3=${I3:-/usr/bin/i3}
 STYLE=$HERE/showhide.conf
+PASS_STYLE=$ROOT/styles/pass-slide.conf
 PLAIN_CONFIG=$HERE/picom-anim.conf
 DISP=${WSDIR_DISPLAY:-:91}
 WORK=${WSDIR_WORK:-${XDG_RUNTIME_DIR:-/tmp}/wsdir-${DISP#:}}
@@ -152,11 +157,9 @@ rules = ({
 });
 EOF
 } >"$OUT/wave.conf"
-# One block for every window of a switch, the ones that hide and show and the ones of the
-# workspaces it passes (ws-pass): it moves from face `face` to face
-# `face - direction * distance`, one monitor height per face, cropped to the monitor.
-# Linear and slow, so a screenshot halfway shows the workspace in between. ws-pass
-# suppresses show and hide, so a show or hide that comes later does not restart it.
+# The pass-slide style, which also draws the workspaces a switch passes (ws-pass), made
+# linear and slow: a switch to the next workspace takes PASS_LENGTH seconds, so a
+# screenshot partway shows the workspaces in between.
 PASS_LENGTH=4
 {
 	echo "plugins = \"$PLUGIN\";"
@@ -164,47 +167,40 @@ PASS_LENGTH=4
 	echo 'vsync = true;'
 	echo 'use-damage = true;'
 	echo 'unredir-if-possible = false;'
-	cat <<EOF
-rules = ({
-  match = "!override_redirect && window_type = 'normal'";
-  keep-image-when-hidden = true;
-  animations = ({
-    triggers = ["open", "show", "hide"];
-    opacity = "window-mapped-opacity * plugin-ws-direction-placed";
-    offset-y = {
-      duration = $PASS_LENGTH;
-      start = "plugin-ws-direction-face * plugin-ws-direction-monitor-height";
-      end = "(plugin-ws-direction-face - plugin-ws-direction-direction * plugin-ws-direction-distance) * plugin-ws-direction-monitor-height";
-    };
-    crop-x = "plugin-ws-direction-monitor-x";
-    crop-y = "plugin-ws-direction-monitor-y";
-    crop-width = "plugin-ws-direction-monitor-width";
-    crop-height = "plugin-ws-direction-monitor-height";
-  }, {
-    triggers = ["ws-pass"];
-    suppressions = ["show", "hide"];
-    opacity = "window-mapped-opacity * plugin-ws-direction-placed";
-    offset-y = {
-      duration = $PASS_LENGTH;
-      start = "plugin-ws-direction-face * plugin-ws-direction-monitor-height";
-      end = "(plugin-ws-direction-face - plugin-ws-direction-direction * plugin-ws-direction-distance) * plugin-ws-direction-monitor-height";
-    };
-    crop-x = "plugin-ws-direction-monitor-x";
-    crop-y = "plugin-ws-direction-monitor-y";
-    crop-width = "plugin-ws-direction-monitor-width";
-    crop-height = "plugin-ws-direction-monitor-height";
-  });
-});
-EOF
+	echo 'rules = ({'
+	echo "  match = \"!override_redirect && window_type = 'normal'\";"
+	sed -E -e 's/cubic-bezier\([^)]*\)/linear/' -e "s/var-length = [0-9.]+;/var-length = $PASS_LENGTH;/" \
+		"$PASS_STYLE"
+	echo '});'
 } >"$OUT/pass.conf"
+# pass-slide as slow as pass.conf, but with its own curve, for check-frames.py: a linear
+# curve stops at full speed.
+{
+	echo "plugins = \"$PLUGIN\";"
+	echo 'backend = "glx";'
+	echo 'vsync = true;'
+	echo 'use-damage = true;'
+	echo 'unredir-if-possible = false;'
+	echo 'rules = ({'
+	echo "  match = \"!override_redirect && window_type = 'normal'\";"
+	sed -E "s/var-length = [0-9.]+;/var-length = $PASS_LENGTH;/" "$PASS_STYLE"
+	echo '});'
+} >"$OUT/pass-eased.conf"
 # The styles include ws-direction/parts/*.conf, which picom looks for next to the config
 # first, so the copy in $OUT is the one under test.
 mkdir -p "$OUT/ws-direction/parts"
 cp "$ROOT"/styles/parts/*.conf "$OUT/ws-direction/parts/"
-# pass_time DISTANCE FRACTION: seconds until FRACTION of a pass.conf switch of DISTANCE
-# workspaces is done.
+# sleep_until T0 SECONDS: sleep until SECONDS after T0 (from date +%s.%N).
+sleep_until() {
+	local left
+	left=$(awk -v t0="$1" -v s="$2" -v now="$(date +%s.%N)" \
+		'BEGIN { d = t0 + s - now; print (d > 0 ? d : 0) }')
+	sleep "$left"
+}
+# pass_time DISTANCE FRACTION: seconds until FRACTION of a pass-slide switch of DISTANCE
+# workspaces is done. Each workspace passed adds a fifth of var-length.
 pass_time() {
-	awk -v l="$PASS_LENGTH" -v f="$2" 'BEGIN { print l * f }'
+	awk -v l="$PASS_LENGTH" -v d="$1" -v f="$2" 'BEGIN { print l * (1 + 0.2 * (d - 1)) * f }'
 }
 
 # --- process handling: only ever stop PIDs started here ---
@@ -274,6 +270,11 @@ wait_until() {
 
 win_id() { xdotool search --name "^$1\$" 2>/dev/null | head -n 1; }
 has_window() { [[ -n $(win_id "$1") ]]; }
+# right_edge TITLE: the x just right of the window, in root coordinates.
+right_edge() {
+	xdotool getwindowgeometry --shell "$(win_id "$1")" |
+		awk -F= '$1 == "X" { x = $2 } $1 == "WIDTH" { w = $2 } END { print x + w }'
+}
 
 # start_xterm INSTANCE TITLE [XTERM ARGS...]
 start_xterm() {
@@ -503,6 +504,13 @@ fi
 "$PICOM" --config "$OUT/wave.conf" --diagnostics >"$OUT/diagnostics-wave.out" 2>&1
 grep -qx "  - wave" "$OUT/diagnostics-wave.out" ||
 	die "this picom has no custom animation triggers, see $OUT/diagnostics-wave.out"
+if "$PICOM" --config "$OUT/pass.conf" --diagnostics >"$OUT/diagnostics-pass.out" 2>&1 &&
+	grep -qx "  - ws-pass" "$OUT/diagnostics-pass.out" &&
+	! grep -qiE "error.*(config|script|parse|line|trigger)" "$OUT/diagnostics-pass.out"; then
+	pass "pass-slide style loads (picom --diagnostics)"
+else
+	fail "pass-slide style loads (picom --diagnostics)" "see $OUT/diagnostics-pass.out"
+fi
 # Every shipped style loads with the plugin and no animation-triggers line: the plugin
 # declares the triggers the styles use.
 bad_styles=
@@ -529,6 +537,7 @@ else
 fi
 # Only what this run installs, not files an earlier run left there.
 rm -rf "$OUT/installed"
+mkdir -p "$OUT/installed/conf" "$OUT/installed/none"
 make -s -C "$ROOT" install PICOM_CONFIG_DIR="$OUT/installed/xdg/picom" \
 	BINDIR="$OUT/installed/bin" MANDIR="$OUT/installed/man" >"$OUT/install.out" 2>&1
 # make uninstall takes away what make install put there, the man page too.
@@ -599,7 +608,7 @@ outputs=$(i3-msg -s "$SOCK" -t get_outputs)
 # The colors are for the screenshot checks below.
 I3_XTERMS=()
 for spec in ws1:ws1-a:ff0000 ws1:ws1-b:ff0000 ws2:ws2-a:0000ff ws3:ws3-a:00ff00 \
-	ws4:ws4-a:ffffff ws5:ws5-a:ffff00 ws7:ws7-a:ffffff notes:notes-a:ffffff \
+	ws4:ws4-a:00ffff ws5:ws5-a:ffff00 ws7:ws7-a:ffffff notes:notes-a:ffffff \
 	alpha:alpha-a:ffffff scratch:scratch:ffffff; do
 	IFS=: read -r inst title color <<<"$spec"
 	color="#$color"
@@ -991,33 +1000,74 @@ else
 fi
 stop_picom
 
-# The plugin starts the custom trigger ws-pass from its frame callback, on all xterms of
-# the switch's monitor, without StartAnimations. Every workspace with an xterm is shown
-# once under this picom, so the xterms have images to keep, and all of them get ws-pass.
-# DPT: 1 is red, 2 is blue, 4 and 7 are white. HDT: 3 is green, 5 is yellow.
+# styles/pass-slide.conf, slowed down. The plugin starts the custom trigger ws-pass from
+# its frame callback, on all xterms of the switch's monitor, without StartAnimations. Every workspace
+# with an xterm is shown once under this picom, so the xterms have images to keep, and
+# all of them get ws-pass. DPT: 1 is red, 2 is blue, 4 is cyan, 7 is white. HDT: 3 is
+# green, 5 is yellow.
 start_picom "$OUT/pass.conf" picom-pass
 for ws in 2:Web 4:Misc 7:Extra 5:Music 3:Term 1:IDE; do
 	i3cmd "workspace $ws"
 	sleep "$SETTLE"
 done
-sleep "$PASS_LENGTH"
+sleep "$(pass_time 3 1.1)"
+
+# pass_switch NAME I3-COMMAND EXPECTATION...: switch, and check that the xterms of the
+# monitor got ws-pass with these variables, and that none of them started a show or hide.
+pass_switch() {
+	local name=$1 cmd=$2
+	shift 2
+	CASE_MARK=$(log_mark)
+	i3cmd "$cmd"
+	sleep "$SETTLE"
+	GOT=$(variables_since "$CASE_MARK" ws-pass)
+	expect "$name" "$@"
+	GOT=$(directions_since "$CASE_MARK")
+	expect "  (no show or hide)" none
+}
 import -window root "$OUT/shot.png"
 before=$(color_part 1000 480 1 1440 0000FF)
 mark=$(log_mark)
+t0=$(date +%s.%N)
 i3cmd 'workspace 4:Misc'
-# Halfway through, 1 has gone up by one monitor height, and 2 is where 1 was.
-sleep "$(awk -v l="$PASS_LENGTH" 'BEGIN { print l / 2 }')"
-import -window root "$OUT/shot.png"
-cp "$OUT/shot.png" "$OUT/shot-pass.png"
+# A third of the way, the lower third of 1 is at the top of DPT and the upper two thirds
+# of 2 below it. Halfway, 2 is where 1 was. At three quarters, the lower half of 2 is on
+# top and the upper half of 4 below it. Black would be a gap between two workspaces; a
+# few rows of it are where an xterm doesn't fill its frame.
+sleep_until "$t0" "$(pass_time 2 0.33)"
+import -window root "$OUT/shot-pass-1.png"
+sleep_until "$t0" "$(pass_time 2 0.5)"
+import -window root "$OUT/shot-pass.png"
+sleep_until "$t0" "$(pass_time 2 0.75)"
+import -window root "$OUT/shot-pass-3.png"
+sleep_until "$t0" "$(pass_time 2 1.1)"
+import -window root "$OUT/shot-pass-after.png"
+# Read only now: reading a screenshot takes long enough to make the next one late.
+cp "$OUT/shot-pass-1.png" "$OUT/shot.png"
+q1_top=$(color_part 1000 480 1 360 FF0000)
+q1_bottom=$(color_part 1000 1560 1 360 0000FF)
+q1_gap=$(color_part 1000 480 1 1440 000000)
+cp "$OUT/shot-pass.png" "$OUT/shot.png"
 during=$(color_part 1000 480 1 1440 0000FF)
-sleep "$PASS_LENGTH"
-import -window root "$OUT/shot.png"
+cp "$OUT/shot-pass-3.png" "$OUT/shot.png"
+q3_top=$(color_part 1000 480 1 360 0000FF)
+q3_bottom=$(color_part 1000 1560 1 360 00FFFF)
+q3_gap=$(color_part 1000 480 1 1440 000000)
+cp "$OUT/shot-pass-after.png" "$OUT/shot.png"
 after=$(color_part 1000 480 1 1440 0000FF)
 if ((before == 0 && during >= 50 && after == 0)); then
 	pass "screenshot: DPT 1->4 draws 2, which it passes, halfway (#0000FF $before% $during% $after%)"
 else
 	fail "screenshot: DPT 1->4 draws 2, which it passes, halfway" \
 		"#0000FF share of a DPT strip: before $before%, halfway $during% (at least 50), after $after%"
+fi
+if ((q1_top >= 90 && q1_bottom >= 90 && q1_gap <= 3 && q3_top >= 90 && q3_bottom >= 90 &&
+	q3_gap <= 3)); then
+	pass "screenshot: DPT 1->4 moves 1, 2 and 4 as one strip (black $q1_gap% and $q3_gap%)"
+else
+	fail "screenshot: DPT 1->4 moves 1, 2 and 4 as one strip" \
+		"a third: top quarter #FF0000 $q1_top%, bottom quarter #0000FF $q1_bottom% (at least 90), black $q1_gap% (at most 3)" \
+		"three quarters: top quarter #0000FF $q3_top%, bottom quarter #00FFFF $q3_bottom% (at least 90), black $q3_gap% (at most 3)"
 fi
 GOT=$(variables_since "$mark" ws-pass)
 expect "  (ws-pass on 1 from face 0, on 2 from face 1, on 4 from face 2, and on 7 too)" \
@@ -1037,28 +1087,31 @@ fi
 pass_case "  (all in the pass of the root window change)" "$mark" '"1:IDE" -> "4:Misc"' \
 	ws1-a ws1-b ws2-a ws4-a
 
-# pass_switch NAME I3-COMMAND EXPECTATION...: switch, and check that the xterms of the
-# monitor got ws-pass with these variables, and that none of them started a show or hide.
-pass_switch() {
-	local name=$1 cmd=$2
-	shift 2
-	CASE_MARK=$(log_mark)
-	i3cmd "$cmd"
-	sleep "$SETTLE"
-	GOT=$(variables_since "$CASE_MARK" ws-pass)
-	expect "$name" "$@"
-	GOT=$(directions_since "$CASE_MARK")
-	expect "  (no show or hide)" none
-}
 pass_switch "DPT 4->1" 'workspace 1:IDE' \
 	"ws7-a ws-pass direction -1 distance 2 face 1/6 selected 1 placed 1 $DPT_RECT" \
 	"ws4-a ws-pass direction -1 distance 2 face 0/6 selected 1 placed 1 $DPT_RECT" \
 	"ws2-a ws-pass direction -1 distance 2 face -1/6 selected 1 placed 1 $DPT_RECT" \
 	"ws1-a ws-pass direction -1 distance 2 face -2/6 selected 1 placed 1 $DPT_RECT" \
 	"ws1-b ws-pass direction -1 distance 2 face -2/6 selected 1 placed 1 $DPT_RECT"
+sleep "$(pass_time 2 1)"
+# Halfway through 1->7, the strip has moved one and a half monitor heights: the lower half
+# of 2 is in the top half of DPT, the upper half of 4 in the bottom half. HDT stays green.
 CASE_MARK=$(log_mark)
+t0=$(date +%s.%N)
 i3cmd 'workspace 7:Extra'
-sleep "$SETTLE"
+sleep_until "$t0" "$(pass_time 3 0.5)"
+import -window root "$OUT/shot.png"
+cp "$OUT/shot.png" "$OUT/shot-pass-7.png"
+top=$(color_part 1000 480 1 360 0000FF)
+bottom=$(color_part 1000 1560 1 360 00FFFF)
+hdt=$(pixel 4000 1000)
+if ((top >= 90 && bottom >= 90)) && [[ $hdt == "#00FF00" ]]; then
+	pass "screenshot: DPT 1->7 draws 2 and then 4, which it passes, halfway (#0000FF $top% on top, #00FFFF $bottom% below)"
+else
+	fail "screenshot: DPT 1->7 draws 2 and then 4, which it passes, halfway" \
+		"#0000FF share of the top quarter of a DPT strip $top%, #00FFFF of the bottom quarter $bottom% (at least 90 each)" \
+		"HDT pixel $hdt (expected #00FF00)"
+fi
 GOT=$(directions_since "$CASE_MARK")
 expect "DPT 1->7: no show or hide" none
 GOT=$(variables_since "$CASE_MARK" ws-pass)
@@ -1070,6 +1123,7 @@ expect "  (ws-pass on 1, 2, 4 and 7, faces 0 to 3)" \
 	"ws7-a ws-pass direction 1 distance 3 face 3/6 selected 1 placed 1 $DPT_RECT"
 pass_case "  (all in the pass of the root window change)" "$CASE_MARK" '"1:IDE" -> "7:Extra"' \
 	ws1-a ws1-b ws2-a ws4-a ws7-a
+sleep_until "$t0" "$(pass_time 3 1.1)"
 pass_switch "DPT 7->1" 'workspace 1:IDE' \
 	"ws7-a ws-pass direction -1 distance 3 face 0/6 selected 1 placed 1 $DPT_RECT" \
 	"ws4-a ws-pass direction -1 distance 3 face -1/6 selected 1 placed 1 $DPT_RECT" \
@@ -1125,7 +1179,89 @@ pass_switch "DPT 2->1 with ws1-b moved back along" \
 	"ws4-a ws-pass direction -1 distance 1 face 1/6 selected 1 placed 1 $DPT_RECT" \
 	"ws7-a ws-pass direction -1 distance 1 face 2/6 selected 1 placed 1 $DPT_RECT"
 sleep "$(pass_time 1 1.1)"
-sleep "$PASS_LENGTH"
+
+# A switch that comes while one runs. Every xterm of DPT gets ws-pass again, and
+# pass-slide's var-pos carries on from where each one is, so the workspaces still move as
+# one strip. 1->2, and a quarter of the way 2->4: the strip is then a quarter of a
+# workspace past 1 and goes on to 4 (linear, in pass_time 1). Halfway through the second
+# switch it is 1.125 workspaces past 1: 2 fills DPT but for its top eighth, and the top
+# eighth of 4 is below it. Without the carry-over, 4 would start a whole workspace below
+# and cover the lower half of 2.
+mark=$(log_mark)
+t0=$(date +%s.%N)
+i3cmd 'workspace 2:Web'
+sleep_until "$t0" "$(pass_time 1 0.25)"
+CASE_MARK=$(log_mark)
+i3cmd 'workspace 4:Misc'
+sleep_until "$t0" "$(pass_time 1 0.75)"
+import -window root "$OUT/shot.png"
+cp "$OUT/shot.png" "$OUT/shot-interrupt.png"
+blue=$(color_part 1000 600 1 1050 0000FF)
+cyan=$(color_part 1000 1830 1 90 00FFFF)
+gap=$(color_part 1000 480 1 1440 000000)
+if ((blue >= 90 && cyan >= 90 && gap <= 3)); then
+	pass "screenshot: DPT 1->2, then 2->4 a quarter of the way, carries the strip on (black $gap%)"
+else
+	fail "screenshot: DPT 1->2, then 2->4 a quarter of the way, carries the strip on" \
+		"#0000FF share of DPT rows 600-1650 $blue%, #00FFFF of rows 1830-1920 $cyan% (at least 90 each), black $gap% (at most 3)"
+fi
+GOT=$(variables_since "$CASE_MARK" ws-pass)
+expect "  (ws-pass on all of DPT's xterms again)" \
+	"ws1-a ws-pass direction 1 distance 1 face -1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-b ws-pass direction 1 distance 1 face -1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws2-a ws-pass direction 1 distance 1 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a ws-pass direction 1 distance 1 face 1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws7-a ws-pass direction 1 distance 1 face 2/6 selected 1 placed 1 $DPT_RECT"
+pass_case "  (all in the pass of the root window change)" "$CASE_MARK" '"2:Web" -> "4:Misc"' \
+	ws1-a ws1-b ws2-a ws4-a ws7-a
+GOT=$(directions_since "$mark")
+expect "  (no show or hide in either switch)" none
+sleep_until "$t0" "$(pass_time 1 1.4)"
+i3cmd 'workspace 1:IDE'
+sleep "$(pass_time 2 1.1)"
+
+# A window moved to a hidden workspace of the other monitor keeps its old place (placed
+# 0), so pass-slide must not draw it when a switch passes its workspace. stale-a (orange)
+# is the right column of DPT's 1, moved to HDT's 5. Then HDT goes from the empty 4:Gap
+# to the empty 6. A quarter of the way, pass-slide would draw stale-a on HDT where the
+# empty 4:Gap is, just right of DPT, with 5's yellow xterm to the right of it.
+right=ws1-a
+(($(right_edge ws1-b) > $(right_edge ws1-a))) && right=ws1-b
+i3cmd "[title=\"^$right\$\"] focus"
+start_xterm stale stale-a -bg "#ff8000"
+STALE_PID=$LAST_PID
+sleep "$SETTLE"
+stale_edge=$(right_edge stale-a)
+i3cmd '[title="^stale-a$"] move container to workspace 5:Music'
+i3cmd 'focus output HDT'
+i3cmd 'workspace 4:Gap'
+sleep "$(pass_time 1 1.1)"
+mark=$(log_mark)
+t0=$(date +%s.%N)
+i3cmd 'workspace 6'
+sleep_until "$t0" "$(pass_time 2 0.25)"
+import -window root "$OUT/shot.png"
+cp "$OUT/shot.png" "$OUT/shot-placed.png"
+stale=$(color_part 0 1000 4520 1 FF8000)
+yellow=$(color_part 3440 1000 1080 1 FFFF00)
+if ((stale_edge >= 3400 && stale == 0 && yellow >= 25 && yellow <= 90)); then
+	pass "screenshot: HDT 4:Gap->6 draws 5's xterm, but not the one whose place is on DPT (#FFFF00 $yellow% of HDT)"
+else
+	fail "screenshot: HDT 4:Gap->6 draws 5's xterm, but not the one whose place is on DPT" \
+		"#FF8000 share of the row $stale% (expected 0), #FFFF00 share of HDT $yellow% (25..90)" \
+		"stale-a ended at x $stale_edge before the move (at least 3400, so it would show on HDT)"
+fi
+GOT=$(variables_since "$mark" ws-pass)
+expect "  (ws-pass on HDT's xterms, stale-a not placed)" \
+	"stale-a ws-pass direction 1 distance 2 face 1/3 selected 1 placed 0 $HDT_RECT" \
+	"ws3-a ws-pass direction 1 distance 2 face -1/3 selected 1 placed 1 $HDT_RECT" \
+	"ws5-a ws-pass direction 1 distance 2 face 1/3 selected 1 placed 1 $HDT_RECT"
+pass_case "  (in the pass of the root window change)" "$mark" '"4:Gap" -> "6"' stale-a ws5-a
+sleep_until "$t0" "$(pass_time 2 1.1)"
+stop "$STALE_PID"
+i3cmd 'workspace 3:Term'
+i3cmd 'focus output DPT'
+sleep "$(pass_time 2 1.1)"
 stop_picom
 
 # The plugin is loaded here too. The hook calls a provider only when an
@@ -1244,6 +1380,15 @@ for style_file in "$ROOT"/styles/*.conf; do
 	grep -q 'triggers = \["show"' "$style_file" || continue
 	style_frames "$style"
 done
+# pass-zoom-cascade's var-new is 1 for the windows of the new workspace and 0 for the
+# others; it was 2^50 for those beyond it, whose wait then outlasted the switch.
+odd=$(grep -oE 'var-new=[^,]*' "$OUT/frames-style-pass-zoom-cascade.csv" | sort -u |
+	grep -vxE 'var-new=(0|1)')
+if [[ -z $odd ]]; then
+	pass "pass-zoom-cascade: var-new is 0 or 1"
+else
+	fail "pass-zoom-cascade: var-new is 0 or 1" "$(tr '\n' ' ' <<<"$odd")"
+fi
 
 # An i3 restart puts every window in a new frame, and picom has no image of the new frames
 # of hidden workspaces. A picom config change drops all images too. The plugin sees
@@ -1572,7 +1717,7 @@ fakewm viewport 0,480,0,480,3440,0,3440,0 current 0 map "$FA" unmap "$FB" unmap 
 	unmap "$FS" map "$FC"
 # pass-slide: the plugin starts ws-pass; 2:B shows once first, so picom keeps fb's image.
 rm -f "$OUT/frames-slow.csv"
-PICOM_DEBUG="frame_timing=$OUT/frames-slow.csv;frame_layout=1" start_picom "$OUT/pass.conf" picom-slow
+PICOM_DEBUG="frame_timing=$OUT/frames-slow.csv;frame_layout=1" start_picom "$OUT/pass-eased.conf" picom-slow
 fakewm current 1 map "$FB" unmap "$FA"
 sleep "$(pass_time 1 1.2)"
 fakewm current 0 map "$FA" unmap "$FB"
@@ -1592,7 +1737,7 @@ sleep "$(pass_time 1 1.2)"
 pass_case "a slow X server, the root window changing again during the read: one start of the switch" \
 	"$mark" '"2:B" -> "1:A"' fa fb
 stop_picom
-# with the plugin's variables.
+check_frames "  (and every frame of these passes check-frames.py)" "$OUT/frames-slow.csv"
 # showhide.conf animates a switch with show and hide, which picom starts itself: after the
 # pause, with the plugin's variables. (Its frames are not checked here: a show and a hide
 # that the window manager sends a frame apart are what the switch styles' ws-pass avoids.

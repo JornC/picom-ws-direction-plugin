@@ -7,7 +7,7 @@
 set -eu
 WORK=$1
 HERE=$(cd "$(dirname "$0")" && pwd)
-STYLES=(slide push wipe fold cascade warp zoom-pan)
+STYLES=(slide pass-slide push wipe fold cascade warp zoom-pan)
 COLS=4
 FONT=$(fc-match -f '%{file}' 'DejaVu Sans Mono:bold')
 

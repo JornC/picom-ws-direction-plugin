@@ -6,8 +6,8 @@ workspace switch went, and which monitor a window's workspace is on. With it a `
 tells them where a window's workspace is among the monitor's workspaces, for effects
 that draw the workspaces a switch passes. picom itself knows nothing about workspaces:
 the plugin reads the window manager's EWMH properties and hands the scripts sixteen
-numbers. What the scripts do with them is up to you; `styles/` has seven switch styles
-to start from, and the `ws-direction` command opens and closes the overview.
+numbers. What the scripts do with them is up to you; `styles/` has ten switch styles to
+start from, and the `ws-direction` command opens and closes the overview.
 
 ![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
 horizontal on the portrait one](docs/slide.gif)
@@ -111,6 +111,8 @@ part, for a slower switch. What a family of styles shares is in one file in
 `styles/parts/`, see below.
 
 - **slide**: the new workspace pushes the old one out.
+- **pass-slide**: slide, but each workspace a switch passes adds a fifth of `var-length`,
+  so a long switch doesn't become a blur.
 - **push**: the new workspace slides in over the old one, which drifts back, like a card
   put on a stack.
 - **wipe**: nothing moves; an edge sweeps across the monitor and uncovers the new
@@ -123,6 +125,10 @@ part, for a slower switch. What a family of styles shares is in one file in
   monitor; then the new one bursts out of a point on the other side.
 - **zoom-pan**: the view zooms out, pans to the new workspace and zooms back in, as if
   the workspaces were tiles side by side.
+- **pass-zoom-pan**: zoom-pan, but each workspace a switch passes adds a fifth of
+  `var-length`, like pass-slide.
+- **pass-zoom-cascade**: pass-zoom-pan, but the windows of the new workspace trail behind
+  it one after another, across the monitor, and all land as the view zooms back in.
 
 Every switch style moves all workspaces of the monitor in a switch, through `ws-pass`: a
 switch that passes workspaces shows them on the way (going from 1 to 4, the windows of 2
@@ -315,7 +321,9 @@ with `var-on-strip` (`parts/axis.conf`); after an animation from another rule a 
 starts from `var-from`.
 
 picom ignores a start on a window it has no image of yet, and on a window whose rule has
-no `ws-pass` animation. Such a window gets its `show` or `hide` as usual.
+no `ws-pass` animation. Such a window gets its `show` or `hide` as usual. So pass-slide
+also has `show` and `hide` blocks, which move a window the same way in a switch, and fade
+it outside one.
 
 ### Backdrops
 
@@ -382,7 +390,8 @@ animation](CONTRIBUTING.md#judging-an-animation).
   passes one, and so on; 0 when the direction is 0. Only workspaces that exist count, so
   under i3 an empty workspace that isn't shown doesn't, and neither do the workspaces of
   other monitors. A workspace that the window manager removes with the switch, like the
-  empty one i3 leaves, counts where it was.
+  empty one i3 leaves, counts where it was. pass-slide uses it to draw the workspaces in
+  between.
 
 `plugin-ws-direction-monitor-x`, `plugin-ws-direction-monitor-y`,
 `plugin-ws-direction-monitor-width`, `plugin-ws-direction-monitor-height`
@@ -713,6 +722,10 @@ workspace the plugin didn't think was shown is a switch to it, and the plugin st
 - **A switch has no animation while a fullscreen window shows.** A switch made while
   picom has the screen unredirected (`unredir-if-possible`) is seen, but picom draws no
   animation for it.
+- **In pass-slide, a window of the new workspace runs a frame behind the rest.** A window
+  that picom has no image of yet gets its `show` instead of `ws-pass`. If i3 shows it one
+  pass after the switch, it runs one frame behind. Once picom has shown each workspace,
+  this no longer happens.
 - **A window that hides fades instead of moving with the switch.** A window manager
   that hides the windows of the old workspace, then waits, and then shows the new one
   without changing `_NET_CURRENT_DESKTOP` first leaves the plugin a moment in which no
