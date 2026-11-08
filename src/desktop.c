@@ -5,15 +5,21 @@
 /// the X server.
 ///
 /// In a pass in which nothing changed, the frame callback only takes what the X server
-/// already sent us, without waiting. Each read costs two round trips to the X server, on
-/// picom's main thread: one for the root window and the list of managed windows, one for
-/// the desktop, state and place of each managed window. Later starts in the same pass
-/// cost none, except for a window the window manager doesn't manage: one more for its
-/// place. Usually a round trip is well under a millisecond, but the reply waits behind
-/// whatever the server is doing (other clients, the window manager's own burst of
-/// requests during a switch, picom's drawing of the previous frame), so it can take tens
-/// of milliseconds.
+/// already sent us, without waiting. Each read costs two round trips to the X server: one
+/// for the root window and the list of managed windows, one for the desktop, state and
+/// place of each managed window. Usually a round trip is well under a millisecond, but
+/// the reply waits behind whatever the server is doing (other clients, the window
+/// manager's own burst of requests during a switch, picom's drawing of the previous
+/// frame), so it can take tens of milliseconds. So the frame callback waits at most
+/// WS_READ_WAIT_US for the replies. If they are not in by then, it pauses the screen
+/// (picom draws nothing and starts no animation, and what changed meanwhile animates once
+/// the pause ends) and takes them in a later pass, then starts the switch. A start that
+/// picom asks us about (the provider) waits for the replies, on picom's main thread;
+/// later starts in the same pass cost none, except for a window the window manager
+/// doesn't manage: one more round trip for its place.
 
+#include <inttypes.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,6 +38,14 @@ xcb_atom_t ws_atom(const char *name) {
 	free(reply);
 	return ret;
 }
+
+/// The requests for the desktop, the state and the place of a managed window.
+struct ws_window_requests {
+	xcb_window_t id;
+	xcb_get_property_cookie_t desktop, state;
+	xcb_get_geometry_cookie_t geometry;
+	xcb_translate_coordinates_cookie_t origin;
+};
 
 /// Take the reply to a request, waiting for it if it hasn't arrived yet. Returns NULL if
 /// the request failed. The caller frees the reply.
@@ -139,7 +153,7 @@ static int64_t ws_window_desktop(xcb_window_t w) {
 	return ws_window_desktop_reply(ws_window_desktop_request(w));
 }
 
-/// Ask for _NET_CLIENT_LIST. Pair with ws_read_clients.
+/// Ask for _NET_CLIENT_LIST. Pair with ws_read_windows_request.
 static xcb_get_property_cookie_t ws_client_list_request(void) {
 	return ws_prop_request(wsd.root, wsd.a_client_list, XCB_ATOM_WINDOW, UINT32_MAX / 4);
 }
@@ -172,41 +186,50 @@ static bool ws_moved(const struct ws_client *before, const char *workspace) {
 	       strcmp(before->workspace, workspace) != 0;
 }
 
-/// Take the reply to ws_client_list_request, then read the desktop, the state and the
-/// place of every managed window, all in one more round trip.
-static void ws_read_clients(xcb_get_property_cookie_t list_request) {
+/// Take the reply to ws_client_list_request, and ask for the desktop, the state and the
+/// place of every managed window, all in one more round trip. Pair with
+/// ws_read_windows_reply.
+static void ws_read_windows_request(xcb_get_property_cookie_t list_request) {
 	auto list = ws_prop_reply(list_request);
-	auto old = wsd.clients;
-	auto n_old = wsd.n_clients;
-	wsd.clients = NULL;
-	wsd.n_clients = 0;
+	wsd.read.windows = NULL;
+	wsd.read.n_windows = 0;
 	if (list == NULL || list->format != 32) {
 		free(list);
-		ws_free_clients(old, n_old);
 		return;
 	}
 	auto n = (unsigned)xcb_get_property_value_length(list) / 4;
 	const xcb_window_t *ids = xcb_get_property_value(list);
-	struct {
-		xcb_get_property_cookie_t desktop, state;
-		xcb_get_geometry_cookie_t geometry;
-		xcb_translate_coordinates_cookie_t origin;
-	} *requests = calloc(n, sizeof(*requests));
-	wsd.clients = malloc(n * sizeof(*wsd.clients));
-	if (requests == NULL || wsd.clients == NULL) {
+	wsd.read.windows = calloc(n, sizeof(*wsd.read.windows));
+	if (wsd.read.windows == NULL && n > 0) {
 		abort();
 	}
 	for (unsigned i = 0; i < n; i++) {
-		requests[i].desktop = ws_window_desktop_request(ids[i]);
-		requests[i].state =
-		    ws_prop_request(ids[i], wsd.a_wm_state, XCB_ATOM_ATOM, 64);
-		requests[i].geometry = xcb_get_geometry(wsd.c, ids[i]);
-		requests[i].origin = xcb_translate_coordinates(wsd.c, ids[i], wsd.root, 0, 0);
+		wsd.read.windows[i] = (struct ws_window_requests){
+		    .id = ids[i],
+		    .desktop = ws_window_desktop_request(ids[i]),
+		    .state = ws_prop_request(ids[i], wsd.a_wm_state, XCB_ATOM_ATOM, 64),
+		    .geometry = xcb_get_geometry(wsd.c, ids[i]),
+		    .origin = xcb_translate_coordinates(wsd.c, ids[i], wsd.root, 0, 0),
+		};
 	}
+	wsd.read.n_windows = n;
+	free(list);
+}
 
+/// Take the replies to ws_read_windows_request: they are the managed windows now.
+static void ws_read_windows_reply(void) {
+	auto old = wsd.clients;
+	auto n_old = wsd.n_clients;
+	auto n = wsd.read.n_windows;
+	wsd.clients = malloc(n * sizeof(*wsd.clients));
+	wsd.n_clients = 0;
+	if (wsd.clients == NULL && n > 0) {
+		abort();
+	}
 	for (unsigned i = 0; i < n; i++) {
-		auto desktop = ws_window_desktop_reply(requests[i].desktop);
-		auto state = ws_prop_reply(requests[i].state);
+		auto r = &wsd.read.windows[i];
+		auto desktop = ws_window_desktop_reply(r->desktop);
+		auto state = ws_prop_reply(r->state);
 		if (state != NULL && state->format == 32) {
 			const xcb_atom_t *atoms = xcb_get_property_value(state);
 			auto n_atoms = xcb_get_property_value_length(state) / 4;
@@ -217,30 +240,30 @@ static void ws_read_clients(xcb_get_property_cookie_t list_request) {
 			}
 		}
 		free(state);
-		xcb_get_geometry_reply_t *g = ws_reply(requests[i].geometry.sequence);
-		xcb_translate_coordinates_reply_t *origin =
-		    ws_reply(requests[i].origin.sequence);
+		xcb_get_geometry_reply_t *g = ws_reply(r->geometry.sequence);
+		xcb_translate_coordinates_reply_t *origin = ws_reply(r->origin.sequence);
 		if (g != NULL && origin != NULL) {
 			char *workspace = desktop >= 0 ? strdup(wsd.names[desktop]) : NULL;
 			if (desktop >= 0 && workspace == NULL) {
 				abort();
 			}
 			wsd.clients[wsd.n_clients++] = (struct ws_client){
-			    .id = ids[i],
+			    .id = r->id,
 			    .desktop = desktop,
 			    .rect = {.x1 = origin->dst_x,
 			             .y1 = origin->dst_y,
 			             .x2 = origin->dst_x + g->width,
 			             .y2 = origin->dst_y + g->height},
 			    .workspace = workspace,
-			    .moved = ws_moved(ws_find_client_in(old, n_old, ids[i]), workspace),
+			    .moved = ws_moved(ws_find_client_in(old, n_old, r->id), workspace),
 			};
 		}
 		free(g);
 		free(origin);
 	}
-	free(requests);
-	free(list);
+	free(wsd.read.windows);
+	wsd.read.windows = NULL;
+	wsd.read.n_windows = 0;
 	ws_free_clients(old, n_old);
 }
 
@@ -391,12 +414,75 @@ void ws_seed_from_windows(void) {
 	free(tree);
 }
 
-/// Read the root window and the managed windows again, in two round trips, and record a
-/// switch if the monitor of the current desktop now shows another workspace.
-void ws_read(void) {
-	auto root = ws_read_root_request();
-	auto clients = ws_client_list_request();
+/// Start reading the root window and the managed windows again: ask for the root window
+/// and the window list. ws_read_advance takes the replies.
+void ws_read_start(void) {
+	wsd.read.root = ws_read_root_request();
+	wsd.read.list = ws_client_list_request();
+	// Its reply comes after those of all requests before it.
+	wsd.read.sync = xcb_get_input_focus(wsd.c);
+	wsd.read.step = WS_READ_ROOT;
+	wsd.read.start_us = ws_now_us();
+	wsd.read.start_frame = wsd.frame;
+	xcb_flush(wsd.c);
+}
+
+/// Wait up to `wait_us` for the replies of the step the read is in, for as long as it
+/// takes with UINT64_MAX. Returns whether they are in.
+static bool ws_read_wait(uint64_t wait_us) {
+	if (wait_us == UINT64_MAX) {
+		free(ws_reply(wsd.read.sync.sequence));
+		return true;
+	}
+	auto deadline = ws_now_us() + wait_us;
+	void *reply = NULL;
+	xcb_generic_error_t *err = NULL;
+	while (!xcb_poll_for_reply(wsd.c, wsd.read.sync.sequence, &reply, &err)) {
+		auto now = ws_now_us();
+		if (now >= deadline) {
+			return false;
+		}
+		struct pollfd fd = {.fd = xcb_get_file_descriptor(wsd.c), .events = POLLIN};
+		poll(&fd, 1, (int)((deadline - now + 999) / 1000));
+	}
+	free(reply);
+	free(err);
+	return true;
+}
+
+/// Take the replies of the read, waiting up to `wait_us` for each of its two round trips
+/// (see ws_read_wait), and record a switch if the monitor of the current desktop now
+/// shows another workspace. Returns whether the read is done; if not, call it again.
+bool ws_read_advance(uint64_t wait_us) {
+	if (wsd.read.step == WS_READ_ROOT) {
+		if (!ws_read_wait(wait_us)) {
+			return false;
+		}
+		// The root window's replies wait in the queue until those of the windows
+		// are in too, so a switch is recorded in the pass that starts it.
+		ws_read_windows_request(wsd.read.list);
+		wsd.read.sync = xcb_get_input_focus(wsd.c);
+		wsd.read.step = WS_READ_WINDOWS;
+		xcb_flush(wsd.c);
+	}
+	if (!ws_read_wait(wait_us)) {
+		return false;
+	}
+	ws_refresh(wsd.read.root);
+	ws_read_windows_reply();
+	wsd.read.step = WS_READ_IDLE;
 	wsd.read_frame = wsd.frame;
-	ws_refresh(root);
-	ws_read_clients(clients);
+	ws_log("Read the root window and %u windows in %" PRIu64 " us%s", wsd.n_clients,
+	       ws_now_us() - wsd.read.start_us, wsd.read.paused ? ", the screen paused" : "");
+	return true;
+}
+
+/// Read the root window and the managed windows again, in two round trips, waiting for
+/// the replies, and record a switch if the monitor of the current desktop now shows
+/// another workspace. A read that waits already is finished.
+void ws_read(void) {
+	if (wsd.read.step == WS_READ_IDLE) {
+		ws_read_start();
+	}
+	ws_read_advance(UINT64_MAX);
 }

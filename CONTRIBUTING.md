@@ -5,7 +5,7 @@ commits. For using it, see the [README](README.md).
 
 ## Building against the picom fork
 
-The plugin needs plugin API 0.4 of the picom fork. No picom release has it yet; it is on
+The plugin needs plugin API 0.5 of the picom fork. No picom release has it yet; it is on
 the `main` branch of the picom fork the plugin is developed with (github.com/JornC/picom),
 which is picom's `next` branch plus one commit per feature. That branch is not published
 yet. CI builds against it at `PICOM_REF` in `.github/workflows/ci.yml`.

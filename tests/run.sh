@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Test harness for the ws-direction picom plugin, and so for the picom plugin API it builds
-# on (animation variables, frame callbacks, start_animation and add_animation_trigger:
-# plugin API 0.4).
+# on (animation variables, frame callbacks, start_animation, add_animation_trigger and
+# pause_screen: plugin API 0.5).
 #
 # Phase 1: a nested Xvfb with two monitors (DPT 3440x1440 at +0+480, HDT 1080x1920 at
 # +3440+0), stock i3, xterms on several workspaces, and picom with the plugin,
@@ -28,7 +28,7 @@
 # workspace switch over several picom frames, and set up cases i3 won't produce on demand
 # (no _NET_DESKTOP_VIEWPORT, sticky windows, a window on the other monitor showing during
 # a switch, a hidden tab and a window the window manager doesn't list showing during a
-# switch).
+# switch), and an X server that is slow to answer during a switch.
 #
 # Prints PASS/FAIL per case and exits 1 if any case failed. Everything runs on
 # $WSDIR_DISPLAY (default :91), never on the real display, and only processes started
@@ -40,7 +40,7 @@
 #
 # Usage: make && tests/run.sh
 # Environment: PICOM (picom binary, default: picom on the PATH; it must have plugin API
-# 0.4), I3 (default /usr/bin/i3),
+# 0.5), I3 (default /usr/bin/i3),
 # WSDIR_DISPLAY (default :91), WSDIR_WORK (directory for the i3 socket and logs, default
 # $XDG_RUNTIME_DIR/wsdir-<display number>), WSDIR_SETTLE (seconds to wait after each
 # step, default 0.7), WSDIR_PLUGIN (the plugin, default build/ws-direction.so).
@@ -441,7 +441,7 @@ else
 	fail "slide style loads (picom --diagnostics)" "see $OUT/diagnostics.out"
 fi
 if grep -q "plugin API is not compatible" "$OUT/diagnostics.out"; then
-	die "this picom does not have plugin API 0.4, see $OUT/diagnostics.out"
+	die "this picom does not have plugin API 0.5, see $OUT/diagnostics.out"
 fi
 "$PICOM" --config "$OUT/wave.conf" --diagnostics >"$OUT/diagnostics-wave.out" 2>&1
 grep -qx "  - wave" "$OUT/diagnostics-wave.out" ||
@@ -1067,6 +1067,72 @@ distances "  (distance 2: without viewports 2:B counts too)" "fc show 2" "fa hid
 variables "  (the whole screen, with all 4 faces)" \
 	"fc show direction 1 distance 2 face 2/4 selected 1 placed 1 monitor 0,0 4520x1920" \
 	"fa hide direction 1 distance 2 face 0/4 selected 1 placed 1 monitor 0,0 4520x1920"
+stop_picom
+
+# The X server can be busy with a switch, and slow to answer the plugin. The plugin then
+# doesn't hold picom up: it pauses the screen until the answers are in. fakewm grabs the
+# server, so it answers no one else, makes the switch 1:A->2:B, and lets go 80 ms later.
+# paused_read MARK: how long the plugin's read after line MARK took with the screen
+# paused, in us (empty if it didn't pause).
+paused_read() {
+	tail -n +"$(($1 + 1))" "$LOG" |
+		sed -nE 's/.*Read the root window and [0-9]+ windows in ([0-9]+) us, the screen paused$/\1/p' |
+		head -n 1
+}
+# plugin_step_max LOG: the longest the plugins' frame callbacks took in a frame, in us,
+# from the P records of picom's frame timing log.
+plugin_step_max() {
+	awk -F, '$1 == "P" { d = $4 - $3; if (d > m) m = d } END { print m + 0 }' "$1"
+}
+# slow_read_case NAME FRAMES MARK: the plugin paused for the read, and no frame callback
+# took long.
+slow_read_case() {
+	local waited longest
+	waited=$(paused_read "$3")
+	longest=$(plugin_step_max "$2")
+	if [[ -n $waited ]] && ((waited >= 60000 && longest < 3000)); then
+		pass "$1 (paused $((waited / 1000)) ms; the longest frame callback took $longest us)"
+	else
+		fail "$1" "read with the screen paused: ${waited:-none} us, longest frame callback: $longest us; see $LOG"
+	fi
+}
+fakewm viewport 0,480,0,480,3440,0,3440,0 current 0 map "$FA" unmap "$FB" unmap "$FB2" \
+	unmap "$FS" map "$FC"
+# pass-slide: the plugin starts ws-pass; 2:B shows once first, so picom keeps fb's image.
+rm -f "$OUT/frames-slow.csv"
+PICOM_DEBUG="frame_timing=$OUT/frames-slow.csv;frame_layout=1" start_picom "$OUT/pass.conf" picom-slow
+fakewm current 1 map "$FB" unmap "$FA"
+sleep "$(pass_time 1 1.2)"
+fakewm current 0 map "$FA" unmap "$FB"
+sleep "$(pass_time 1 1.2)"
+mark=$(log_mark)
+fakewm grab current 1 sleep 20 map "$FB" unmap "$FA" sleep 80 ungrab
+sleep "$(pass_time 1 1.2)"
+slow_read_case "a slow X server: the plugin pauses the screen for its read, not holding up picom" \
+	"$OUT/frames-slow.csv" "$mark"
+pass_case "  (then it starts the windows of the switch together)" "$mark" '"1:A" -> "2:B"' fa fb
+# The root window changes again while the read waits: the plugin reads again, and starts
+# the switch once, from the new replies.
+mark=$(log_mark)
+fakewm grab current 0 sleep 20 map "$FA" unmap "$FB" sleep 20 \
+	clients "$FA:0,$FB:1,$FB2:1,$FC:2,$FC2:2,$FD:3,$FS:sticky" sleep 60 ungrab
+sleep "$(pass_time 1 1.2)"
+pass_case "a slow X server, the root window changing again during the read: one start of the switch" \
+	"$mark" '"2:B" -> "1:A"' fa fb
+stop_picom
+# slide animates a switch with show and hide, which picom starts itself: after the pause,
+# with the plugin's variables.
+rm -f "$OUT/frames-slow-slide.csv"
+PICOM_DEBUG="frame_timing=$OUT/frames-slow-slide.csv;frame_layout=1" start_picom "$CONFIG" picom-slow-slide
+mark=$(log_mark)
+fakewm grab current 1 sleep 20 map "$FB" unmap "$FA" sleep 80 ungrab
+sleep "$SETTLE"
+slow_read_case "a slow X server with slide: the plugin pauses the screen for its read" \
+	"$OUT/frames-slow-slide.csv" "$mark"
+GOT=$(directions_since "$mark")
+expect "  (and the show and hide still start, with the switch's direction)" "fb show 1" "fa hide 1"
+fakewm current 0 map "$FA" unmap "$FB"
+sleep "$SETTLE"
 stop_picom
 
 # Errors from before picom opens its log file (config, plugins, script compiling) are in

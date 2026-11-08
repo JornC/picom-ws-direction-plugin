@@ -1,8 +1,8 @@
 # picom plugin: workspace slide direction and workspace monitor for animation scripts.
-# Needs plugin API 0.4 of the picom fork (add_animation_variable, add_frame_callback,
-# start_animation and add_animation_trigger). make finds the installed picom's headers
-# with pkg-config picom-api. If the installed picom doesn't have the API, point
-# PICOM_API_CFLAGS at a picom tree that does, e.g.
+# Needs plugin API 0.5 of the picom fork (add_animation_variable, add_frame_callback,
+# start_animation, add_animation_trigger and pause_screen). make finds the installed
+# picom's headers with pkg-config picom-api. If the installed picom doesn't have the API,
+# point PICOM_API_CFLAGS at a picom tree that does, e.g.
 #   make PICOM_API_CFLAGS=-I/path/to/picom/include
 PKG_CONFIG ?= pkg-config
 # picom-api.pc's Cflags name include/picom, but the code includes <picom/api.h>, so the

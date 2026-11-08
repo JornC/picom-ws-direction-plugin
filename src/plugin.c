@@ -80,6 +80,15 @@
 #include "version.h"
 #include "ws_direction.h"
 
+/// How long a pass waits for the X server to answer a read of the root window and the
+/// managed windows. An idle server answers well within it; one that is busy, often with
+/// the switch itself, can take tens of milliseconds, and then we let picom go on, with
+/// the screen paused, and take the replies in a later pass.
+#define WS_READ_WAIT_US 1000
+/// While a read waits, we pause the screen for this many seconds at a time, again in
+/// every pass. So a pass comes at least this often.
+#define WS_READ_TICK 0.002
+
 static const char *const ws_variable_names[] = {
     [WS_VAR_DIRECTION] = "direction",
     [WS_VAR_DISTANCE] = "distance",
@@ -176,7 +185,38 @@ static void ws_frame(uint64_t frame, [[maybe_unused]] void *user_data) {
 		unstarted |= ws_unstarted_switch(&wsd.tracked[i]) > 0;
 	}
 	if (root_changed || unstarted) {
-		ws_read();
+		if (wsd.read.step == WS_READ_IDLE) {
+			ws_read_start();
+		} else if (root_changed) {
+			wsd.read.again = true;
+		}
+	}
+	if (wsd.read.step != WS_READ_IDLE) {
+		do {
+			// Only the pass that starts a read waits; the pause
+			// brings the others.
+			auto wait = wsd.read.start_frame == wsd.frame ? WS_READ_WAIT_US : 0;
+			if (!ws_read_advance(wait)) {
+				// The X server is busy, often with the switch itself.
+				// Instead of holding up picom, pause the screen until it
+				// answers: picom draws nothing and starts no animation
+				// meanwhile, and what changed then animates once the
+				// pause ends.
+				wsd.read.paused = true;
+				wsd.api->pause_screen("plugin-ws-direction", WS_READ_TICK, 0);
+				return;
+			}
+			if (wsd.read.again) {
+				// The replies may be from before the change: start
+				// nothing from them.
+				wsd.read.again = false;
+				ws_read_start();
+			}
+		} while (wsd.read.step != WS_READ_IDLE);
+		if (wsd.read.paused) {
+			wsd.read.paused = false;
+			wsd.api->pause_screen("plugin-ws-direction", 0, 0);
+		}
 		ws_start_passes();
 	}
 }

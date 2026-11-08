@@ -21,14 +21,14 @@ makes them.
 
 ## Requirements
 
-- **picom with plugin API 0.4 of the picom fork**: the animation variable hook, frame
-  callbacks that can start animations, and custom triggers a plugin declares. No picom
-  release has it yet. Its first part, the animation variable hook, is proposed to picom
-  upstream; the rest is only in the picom fork this plugin is developed with. Upstream
-  picom numbers its plugin API on its own (it is at 0.1); once it has these calls, the
-  plugin will ask for upstream's number. Any other picom prints `ws-direction: picom's
-  plugin API is not compatible` and runs without the variables, so every animation
-  whose script reads one fails to load.
+- **picom with plugin API 0.5 of the picom fork**: the animation variable hook, frame
+  callbacks that can start animations, custom triggers a plugin declares, and a paused
+  screen. No picom release has it yet. Its first part, the animation variable hook, is
+  proposed to picom upstream; the rest is only in the picom fork this plugin is
+  developed with. Upstream picom numbers its plugin API on its own (it is at 0.1); once
+  it has these calls, the plugin will ask for upstream's number. Any other picom prints
+  `ws-direction: picom's plugin API is not compatible` and runs without the variables,
+  so every animation whose script reads one fails to load.
 - **X11**. The monitors come from RandR.
 - **An EWMH window manager.** It is tested with i3 only. See
   [Window manager integration](#window-manager-integration) for what the plugin needs

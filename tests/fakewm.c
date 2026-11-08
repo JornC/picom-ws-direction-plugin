@@ -14,6 +14,9 @@
 //                         each one (N is a desktop or sticky)
 //   hidden WIN 1|0        set or remove _NET_WM_STATE_HIDDEN on a window
 //   map WIN / unmap WIN   map or unmap a window
+//   grab / ungrab         grab and ungrab the server: until the ungrab, the server
+//                         handles the requests of no other client, though they still
+//                         get the events of our steps, like a server busy with a switch
 //   sleep MS              wait
 //
 // Build: cc -o fakewm fakewm.c $(pkg-config --cflags --libs xcb)
@@ -148,6 +151,10 @@ int main(int argc, char **argv) {
 		} else if (strcmp(step, "unmap") == 0) {
 			xcb_unmap_window(
 			    c, (xcb_window_t)strtoul(next(argc, argv, &i), NULL, 0));
+		} else if (strcmp(step, "grab") == 0) {
+			xcb_grab_server(c);
+		} else if (strcmp(step, "ungrab") == 0) {
+			xcb_ungrab_server(c);
 		} else if (strcmp(step, "sleep") == 0) {
 			xcb_flush(c);
 			sleep_ms(strtol(next(argc, argv, &i), NULL, 10));

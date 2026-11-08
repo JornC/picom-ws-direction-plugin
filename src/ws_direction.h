@@ -18,7 +18,7 @@
 #include <xcb/xcb.h>
 
 /// The plugin API the plugin needs is 0.WS_API_MINOR, as the picom fork numbers it.
-#define WS_API_MINOR 4
+#define WS_API_MINOR 5
 #define WS_STR(x) #x
 #define WS_XSTR(x) WS_STR(x)
 #define WS_API_VERSION "0." WS_XSTR(WS_API_MINOR)
@@ -118,6 +118,13 @@ struct ws_root_requests {
 	xcb_randr_get_monitors_cookie_t monitors;
 };
 
+/// Where a read of the root window and the managed windows is: it waits for the replies
+/// to the root window and the window list, then for those of the windows in the list.
+enum ws_read_step { WS_READ_IDLE, WS_READ_ROOT, WS_READ_WINDOWS };
+
+// Defined in desktop.c, the only module that looks inside it.
+struct ws_window_requests;
+
 /// Everything the plugin knows, defined in plugin.c.
 struct ws_state {
 	const struct picom_api *api;
@@ -133,6 +140,23 @@ struct ws_state {
 	uint64_t frame_time_us;
 	/// The pass in which we last read the root window and the managed windows.
 	uint64_t read_frame;
+	/// A read of the root window and the managed windows that waits for its replies,
+	/// see ws_read_start.
+	struct {
+		enum ws_read_step step;
+		struct ws_root_requests root;
+		xcb_get_property_cookie_t list;
+		struct ws_window_requests *windows;
+		unsigned n_windows;
+		/// The last request of the step: once its reply is in, all of them are.
+		xcb_get_input_focus_cookie_t sync;
+		/// When it started, and in which pass.
+		uint64_t start_us, start_frame;
+		/// Whether the screen is paused while it waits.
+		bool paused;
+		/// Whether the root window changed again while it waited.
+		bool again;
+	} read;
 	/// How often we waited for the X server while working out the variables of one
 	/// window. For the log.
 	unsigned n_waits;
@@ -188,6 +212,8 @@ const struct ws_client *ws_find_client(xcb_window_t id);
 bool ws_read_root_reply(struct ws_root_requests requests);
 bool ws_read_root(void);
 void ws_seed_from_windows(void);
+void ws_read_start(void);
+bool ws_read_advance(uint64_t wait_us);
 void ws_read(void);
 
 // passes.c

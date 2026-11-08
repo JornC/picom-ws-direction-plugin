@@ -4,7 +4,7 @@
 
 The first version. The commits before it had no version.
 
-It needs plugin API 0.4 of the picom fork (CI builds against the fork at `PICOM_REF`).
+It needs plugin API 0.5 of the picom fork (CI builds against the fork at `PICOM_REF`).
 
 Upgrading from the unversioned plugin on `main`:
 
@@ -20,6 +20,8 @@ Variables:
 - Ten animation variables: `direction`, `distance`, `monitor-x`, `monitor-y`,
   `monitor-width`, `monitor-height`, `faces`, `face`, `selected` and `placed`, all under
   `plugin-ws-direction-`.
+- The root window and the managed windows are read at most once per pass. When the X
+  server is slow to answer, the plugin pauses the screen instead of holding picom up.
 - `WS_DIRECTION_LOG` logs every decision, in picom's log format. Its first line is the
   plugin's version.
 
