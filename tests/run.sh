@@ -36,7 +36,8 @@
 # while it is open moves the bright tile, and a click on a window picks it ("open --wait"
 # returns 0), while a click on no window does nothing ("open --wait" returns 1 on close).
 # Two toggles at once are both done, --output and --all open the monitors they name, and
-# "open --wait --buttons" returns for the other buttons. With styles/cube.conf and
+# "open --wait --buttons" returns for the other buttons, and with var-darken 1 the tiles
+# not shown are darkened rather than see-through. With styles/cube.conf and
 # styles/flip.conf, slowed down, a screenshot partway through a switch shows the
 # workspaces in perspective, on their monitor, and not the back of the flip's card, and
 # check-frames.py checks every frame of those switches in picom's frame timing log, also
@@ -1653,6 +1654,34 @@ else
 fi
 i3cmd 'workspace 1:IDE'
 sleep "$(pass_time 1 1.1)"
+stop_picom
+
+# With var-darken 1 the tiles the monitor doesn't show stay opaque and picom darkens them
+# (its dim output): 2:Web's tile is the same 70% blue on the black screen, but every
+# window is drawn at full opacity, none at 70%. The frame log says with what opacity.
+mkdir -p "$OUT/darken/ws-direction/parts"
+cp "$OUT"/ws-direction/parts/*.conf "$OUT/darken/ws-direction/parts/"
+sed -i 's/^var-darken = 0;/var-darken = 1;/' "$OUT/darken/ws-direction/parts/overview.conf"
+cp "$OUT/wall.conf" "$OUT/darken/wall.conf"
+rm -f "$OUT/frames-darken.csv"
+PICOM_DEBUG="frame_timing=$OUT/frames-darken.csv;frame_layout=1" start_picom "$OUT/darken/wall.conf" picom-darken
+i3cmd 'workspace 2:Web'
+sleep "$(pass_time 1 1.1)"
+i3cmd 'workspace 1:IDE'
+sleep "$(pass_time 1 1.1)"
+mark=$(log_mark)
+unfold open
+sleep 1
+wall_case "wall with var-darken 1: 2:Web's tile is darkened" "$mark" "#FF0000 #FF0000" "#0000B3 #0000B2"
+last_frame=$(grep '^W,' "$OUT/frames-darken.csv" | tail -n 1 | cut -d, -f2)
+opacities=$(grep "^W,$last_frame," "$OUT/frames-darken.csv" | cut -d, -f17 | sort -u | tr '\n' ' ')
+if [[ -n $last_frame && $opacities == *1.0000* && $opacities != *0.7000* ]]; then
+	pass "  (every window is drawn opaque, none at 70%: opacities $opacities)"
+else
+	fail "  (every window is drawn opaque)" "opacities in frame ${last_frame:-none}: $opacities"
+fi
+unfold close
+sleep 1
 stop_picom
 
 # styles/cube.conf and styles/flip.conf put the workspaces on the sides of a box, or of a

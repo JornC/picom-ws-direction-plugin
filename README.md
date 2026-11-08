@@ -198,7 +198,9 @@ change it in one place and styles that go together can't drift apart:
   the box that turns.
 - `zoom.conf`, for the zoom styles and wall: `var-zoom` and `var-gap`, so the overview's
   strip is the one the switches pan along.
-- `overview.conf`, for wall and unfold: `var-fill` and `var-dim`.
+- `overview.conf`, for wall and unfold: `var-fill`, `var-dim` and `var-darken` (0 lowers
+  the opacity of the workspaces the monitor doesn't show, so what lies under them shows
+  through; 1 darkens them with picom's `dim` output, so they stay opaque).
 - `prism.conf` and `prism-view.conf`: how cube, flip and unfold draw the box, and how far
   it moves back in a switch.
 

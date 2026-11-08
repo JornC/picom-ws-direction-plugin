@@ -52,6 +52,7 @@ Styles:
 - The overview unfold, for cube.
 - `var-eye-mm` in `parts/box.conf` puts the eye of cube, flip and unfold where the user
   sits, from the monitor's size in millimetres.
+- `var-darken` in `parts/overview.conf` darkens the workspaces the overview doesn't show.
 
 Switch passes:
 
