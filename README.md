@@ -12,8 +12,8 @@ horizontal on the portrait one](docs/slide.gif)
 
 It needs a picom with plugin API 0.2, which adds the animation variable hook. No picom
 release has it yet; the `hook-v2` branch of https://github.com/JornC/picom is based on
-picom's `next` branch, with the hook added. An older picom logs `ws-direction: picom is too old`
-and runs without the variables.
+picom's `next` branch, with the hook added. An older picom logs `ws-direction: picom's plugin
+API is not compatible` and runs without the variables.
 
 ## Install
 

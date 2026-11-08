@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-// A tiny stand-in for a window manager, used by run.sh to test picom's
-// workspace-direction tracking without i3. It runs a list of steps on one X
+// A tiny stand-in for a window manager, used by run.sh to test the plugin's
+// workspace switch tracking without i3. It runs a list of steps on one X
 // connection, in order, and flushes after each one, like a real window manager
 // would. "sleep" lets the steps land in different picom frames.
 //
@@ -26,8 +26,8 @@ static xcb_connection_t *c;
 static xcb_window_t root;
 
 static xcb_atom_t atom(const char *name) {
-	xcb_intern_atom_reply_t *r =
-	    xcb_intern_atom_reply(c, xcb_intern_atom(c, 0, (uint16_t)strlen(name), name), NULL);
+	xcb_intern_atom_reply_t *r = xcb_intern_atom_reply(
+	    c, xcb_intern_atom(c, 0, (uint16_t)strlen(name), name), NULL);
 	if (r == NULL) {
 		fprintf(stderr, "fakewm: cannot intern %s\n", name);
 		exit(1);
@@ -45,8 +45,8 @@ static void set_cardinals(xcb_window_t w, const char *prop, const char *list) {
 		values[n++] = (uint32_t)strtoul(tok, NULL, 0);
 	}
 	free(copy);
-	xcb_change_property(c, XCB_PROP_MODE_REPLACE, w, atom(prop), XCB_ATOM_CARDINAL, 32,
-	                    n, values);
+	xcb_change_property(c, XCB_PROP_MODE_REPLACE, w, atom(prop), XCB_ATOM_CARDINAL,
+	                    32, n, values);
 }
 
 static void set_names(const char *list) {
@@ -100,9 +100,11 @@ int main(int argc, char **argv) {
 			set_cardinals(w, "_NET_WM_DESKTOP",
 			              strcmp(d, "sticky") == 0 ? "0xFFFFFFFF" : d);
 		} else if (strcmp(step, "map") == 0) {
-			xcb_map_window(c, (xcb_window_t)strtoul(next(argc, argv, &i), NULL, 0));
+			xcb_map_window(
+			    c, (xcb_window_t)strtoul(next(argc, argv, &i), NULL, 0));
 		} else if (strcmp(step, "unmap") == 0) {
-			xcb_unmap_window(c, (xcb_window_t)strtoul(next(argc, argv, &i), NULL, 0));
+			xcb_unmap_window(
+			    c, (xcb_window_t)strtoul(next(argc, argv, &i), NULL, 0));
 		} else if (strcmp(step, "sleep") == 0) {
 			xcb_flush(c);
 			sleep_ms(strtol(next(argc, argv, &i), NULL, 10));

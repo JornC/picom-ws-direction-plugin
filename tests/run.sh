@@ -5,7 +5,7 @@
 # Phase 1: a nested Xvfb with two monitors (DPT 3440x1440 at +0+480, HDT 1080x1920 at
 # +3440+0), stock i3, xterms on several workspaces, and picom with the plugin,
 # styles/slide.conf and debug logging. It runs i3 commands through i3-msg and checks
-# the workspace-direction that the plugin logs for every window that shows, opens or
+# the direction that the plugin logs for every window that shows, opens or
 # hides. It also takes screenshots in the middle of slowed-down slides, to check the
 # slide style slides the right way and stays on its monitor. Then it runs picom with
 # tests/picom-anim.conf, whose scripts don't read the variables, and checks the plugin
@@ -205,7 +205,7 @@ log_mark() { wc -l <"$LOG"; }
 # "open" counts as "show": a window's first show after picom started is an open.
 directions_since() {
 	tail -n +"$(($1 + 1))" "$LOG" |
-		sed -nE 's/.*\] (open|show|hide) of window 0x[0-9a-f]+ \((.*)\): workspace-direction = (-?[0-9]+) \(.*/\2 \1 \3/p' |
+		sed -nE 's/.*\] (open|show|hide) of window 0x[0-9a-f]+ \((.*)\): direction = (-?[0-9]+) \(.*/\2 \1 \3/p' |
 		sed -E 's/ open / show /' | sort -u
 }
 
@@ -276,7 +276,7 @@ if "$PICOM" --config "$CONFIG" --diagnostics >"$OUT/diagnostics.out" 2>&1 &&
 else
 	fail "slide style loads (picom --diagnostics)" "see $OUT/diagnostics.out"
 fi
-if grep -q "picom is too old" "$OUT/diagnostics.out"; then
+if grep -q "plugin API is not compatible" "$OUT/diagnostics.out"; then
 	die "this picom has no animation variable hook (plugin API 0.2), see $OUT/diagnostics.out"
 fi
 
@@ -532,7 +532,7 @@ sleep "$SETTLE"
 # added its variables without a complaint. Complaints go to stderr: plugins load
 # while the config is parsed, before picom opens its log file.
 starts=$(grep -c "Starting animation" <(tail -n +"$((mark + 1))" "$LOG"))
-decisions=$(grep -c ": workspace-direction = " "$LOG")
+decisions=$(grep -c ": direction = " "$LOG")
 if grep -qF "$PLUGIN" "/proc/$PICOM_PID/maps" &&
 	grep -q 'Workspace ".*" is shown' "$LOG" &&
 	! grep -qE "ws-direction:|Cannot add animation variable" "$OUT/picom-plain.out" &&
@@ -581,8 +581,8 @@ fake_case "DPT 1:A->2:B as root change, map, unmap 40 ms apart; an unrelated win
 	"fb show 1" "fa hide 1" "fb2 show 0"
 t_switch=$(log_time_ms "$mark" 'Workspace switch on monitor')
 # The decision lines, not picom's own lines about these windows.
-t_show=$(log_time_ms "$mark" 'of window 0x[0-9a-f]+ \(fb\): workspace-direction = ')
-t_hide=$(log_time_ms "$mark" 'of window 0x[0-9a-f]+ \(fa\): workspace-direction = ')
+t_show=$(log_time_ms "$mark" 'of window 0x[0-9a-f]+ \(fb\): direction = ')
+t_hide=$(log_time_ms "$mark" 'of window 0x[0-9a-f]+ \(fa\): direction = ')
 if [[ -n $t_switch && -n $t_show && -n $t_hide ]] && ((t_hide - t_show >= 20)); then
 	pass "  (those steps were handled in different frames: +$((t_show - t_switch)) ms, +$((t_hide - t_show)) ms)"
 else
@@ -628,7 +628,7 @@ bad=0
 for log in "$OUT"/picom-*.log; do
 	[[ $log != "$OUT/picom-plain.log" ]] || continue
 	starts=$(grep -c "Starting animation" "$log")
-	decisions=$(grep -c ": workspace-direction = " "$log")
+	decisions=$(grep -c ": direction = " "$log")
 	counts+=" $(basename "$log" .log):$decisions/$starts"
 	((starts > 0 && decisions == starts)) || bad=1
 done

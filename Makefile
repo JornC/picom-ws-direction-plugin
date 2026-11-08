@@ -4,13 +4,21 @@
 #   make PICOM_API_CFLAGS=-I/path/to/picom/include
 PICOM_API_CFLAGS ?=
 CFLAGS ?= -O2 -g
-override CFLAGS += -std=gnu23 -Wall -Wextra -Wfatal-errors -fPIC -fvisibility=hidden $(PICOM_API_CFLAGS) \
+override CFLAGS += -std=gnu23 -Wall -Wextra -Wfatal-errors $(PICOM_API_CFLAGS) \
 	$(shell pkg-config --cflags xcb xcb-randr)
 LDLIBS = $(shell pkg-config --libs xcb xcb-randr)
 
-build/ws-direction.so: ws_direction.c
+# The plugin is every file in src/.
+PLUGIN_OBJS = $(patsubst src/%.c,build/%.o,$(wildcard src/*.c))
+
+build/ws-direction.so: $(PLUGIN_OBJS)
+	$(CC) $(CFLAGS) -shared -o $@ $^ $(LDLIBS)
+
+build/%.o: src/%.c
 	@mkdir -p build
-	$(CC) $(CFLAGS) -shared -o $@ $< $(LDLIBS)
+	$(CC) $(CFLAGS) -fPIC -fvisibility=hidden -MMD -MP -c -o $@ $<
+
+-include $(wildcard build/*.d)
 
 # Puts the plugin and the styles where picom finds them by name, for
 #   plugins = "ws-direction.so";   and   @include "ws-direction/slide.conf"

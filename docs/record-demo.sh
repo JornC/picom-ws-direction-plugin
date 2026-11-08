@@ -101,7 +101,7 @@ win() {
 	sleep 0.3
 }
 # 1:IDE: three columns.
-win w1a '#2f5d9e' '1:IDE  editor' "$ROOT/ws_direction.c" 200
+win w1a '#2f5d9e' '1:IDE  editor' "$ROOT/src/passes.c" 207
 win w1b '#29528c' '1:IDE  build' "$ROOT/tests/run.sh" 250
 win w1c '#22467a' '1:IDE  notes' "$ROOT/README.md" 40
 # 2:Web: a 2x2 grid.
@@ -114,7 +114,7 @@ i3cmd '[instance="^w2b$"] focus'
 i3cmd 'split v'
 win w2d '#1c5b49' '2:Web  mail' "$ROOT/docs/record-demo.sh" 1
 # 3:Chat: one wide window, two stacked on the right.
-win w3a '#8a4fa8' '3:Chat  general' "$ROOT/ws_direction.c" 40
+win w3a '#8a4fa8' '3:Chat  general' "$ROOT/src/plugin.c" 40
 win w3b '#7a4595' '3:Chat  people' "$ROOT/Makefile" 1
 i3cmd '[instance="^w3b$"] focus'
 i3cmd 'split v'
