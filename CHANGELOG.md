@@ -44,6 +44,8 @@ Styles:
   family of styles shares is in one part each in `styles/parts/`.
 - Workspaces move along the short side of each monitor. `var-length` sets how long a
   switch takes. A switch made while one runs goes on from where the windows are.
+- What a switch that interrupts another does is the user's choice: `var-interrupt` and
+  `var-follow` in `parts/switch.conf`.
 
 Switch passes:
 

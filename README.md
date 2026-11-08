@@ -147,8 +147,10 @@ change it in one place and styles that go together can't drift apart:
   below or right, -1 above or left).
 - `switch.conf`, for the switch styles: `var-other-time` (the fade outside a switch,
   0.1 s), `var-wrap` (1 puts the workspaces on a ring, and a switch goes the short way
-  round), and what a switch is made of: `var-travel`, `var-face`, `var-start`, `var-end`,
-  `var-time`, `var-pos`, `var-q` and `var-dip`.
+  round), what a switch that interrupts another does (`var-interrupt`, `var-follow`, see
+  [Workspaces a switch passes](#workspaces-a-switch-passes)), and what a switch is made
+  of: `var-travel`, `var-face`, `var-start`, `var-end`, `var-time`, `var-pos`, `var-q`
+  and `var-dip`.
 - `zoom.conf`, for the zoom styles: `var-zoom` and `var-gap`.
 
 `make install` puts them next to the styles. To change one, copy it to
@@ -281,6 +283,29 @@ switch, like how far along the switch is, would make the windows jump. The same 
 for anything else the windows of two workspaces share: push and wipe crop each
 workspace by its own `var-pos` (where the card on top of it, or the moving monitor,
 lies), not by a share of the switch.
+
+picom also tells the new animation where the old one was: `<name>-before` is the value of
+a variable in the interrupted animation, `<name>-before-speed` how fast it changed, and
+`interrupted` whether there was one, in any expression, also in a duration or a delay.
+`parts/switch.conf` uses them, so every switch style can choose what an interruption
+looks like:
+
+- `var-interrupt = 0` (the default) starts the style's curve again from where each window
+  is: it slows to a stop and speeds up again. `1` keeps the speed the window has, and
+  slows it to rest at its place on a cubic curve. `2` lets a spring take it there from
+  that speed; the spring is `var-spring`'s curve, `spring(169, 26)`, and the animation
+  lasts until the spring is within a quarter of a pixel of its place, which is longer
+  than `var-length`.
+- `var-follow = 1` makes a switch that interrupts one take the time of the distance its
+  windows still have to go (`var-left`), by the same rule as `var-time`: going back a
+  third of the way takes less than a whole switch. The default, 0, takes the time of the
+  workspaces the switch moves.
+- The zoom and the box's depth (`var-dip`) go on from where they are, and still rise for
+  the new switch and come back to 0 at its end, so the box stays back while it passes
+  sides.
+- cascade's and pass-zoom-cascade's new windows that were moving don't wait again
+  (`var-moving`), nor warp's (`var-s-moving`).
+- With `var-wrap = 1`, a window goes the short way round from where it was.
 
 A style that uses `parts/switch.conf` sets `var-from` and `var-to`, where a window is on
 the strip at the start and the end of a switch, and its curve as `var-ease`, from
