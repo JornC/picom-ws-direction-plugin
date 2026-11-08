@@ -84,6 +84,8 @@ for _ in $(seq 50); do i3-msg -s "$SOCK" -t get_version >/dev/null 2>&1 && break
 # win INSTANCE BG LABEL FILE LINE: a terminal with a heading and text from this repo, so
 # that moving and scaling show. It redraws when i3 resizes it, so the heading stays on top.
 win() {
+	# The inner bash expands the script, not this one.
+	# shellcheck disable=SC2016
 	bg "$OUT/xterm-$1.log" env L="$3" F="$4" N="$5" xterm -name "$1" -bg "$2" -fg '#eef1f6' \
 		-fa 'DejaVu Sans Mono' -fs 6 +sb -b 8 -bw 0 -e bash -c '
 			last=

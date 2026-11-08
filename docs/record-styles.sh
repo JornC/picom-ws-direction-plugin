@@ -13,12 +13,12 @@ FONT=$(fc-match -f '%{file}' 'DejaVu Sans Mono:bold')
 
 # grid DIR GIF: the recordings in DIR/<style>/raw.mkv, side by side, as GIF.
 grid() {
-	local inputs=() tiles= names= layout= i
+	local inputs=() tiles='' names='' layout='' i
 	for i in "${!STYLES[@]}"; do
 		inputs+=(-i "$1/${STYLES[i]}/raw.mkv")
 		tiles+="[$i]scale=376:160:flags=lanczos,drawtext=fontfile=$FONT:text=${STYLES[i]}:x=10:y=10:fontsize=17:fontcolor=white[v$i];"
 		names+="[v$i]"
-		layout+="${layout:+|}$((i % COLS * 376))_$((i / COLS * 160))"
+		layout+="${layout:+|}$((i % COLS * 376))_$(((i / COLS) * 160))"
 	done
 	ffmpeg -v error -y "${inputs[@]}" -filter_complex "$tiles${names}xstack=inputs=${#STYLES[@]}:layout=$layout:shortest=1:fill=black,fps=25,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" \
 		-loop 0 "$2"

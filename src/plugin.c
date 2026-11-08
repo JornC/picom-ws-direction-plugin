@@ -60,6 +60,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "version.h"
 #include "ws_direction.h"
 
 static const char *const ws_variable_names[] = {
@@ -127,6 +128,7 @@ __attribute__((constructor)) static void ws_init(void) {
 	if (log_path != NULL && *log_path) {
 		wsd.log = fopen(log_path, "a");
 	}
+	ws_log("ws-direction %s", WS_DIRECTION_VERSION);
 	auto api = picom_api_get_interfaces(0, WS_API_MINOR, "ws-direction");
 	if (api == NULL) {
 		ws_fail("picom's plugin API is not compatible: ws-direction needs plugin "

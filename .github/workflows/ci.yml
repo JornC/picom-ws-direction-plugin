@@ -1,0 +1,127 @@
+# The plugin needs plugin API 0.2 of the picom fork, which only the fork has so far. Both
+# jobs fetch the fork at PICOM_REF from github.com/JornC/picom: its branch stack/main,
+# until it is tagged.
+#
+# clang-format output differs between major versions, so the formatting check pins
+# clang-format 23.1.3, the version the code is formatted with. shellcheck is pinned to
+# 0.11.0 for the same reason.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  PICOM_REPOSITORY: JornC/picom
+  PICOM_REF: stack/main
+
+jobs:
+  build:
+    name: build (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The code is C23 (-std=gnu23): GCC 14 or clang 18 and later.
+          - cc: gcc-14
+            style: true
+          - cc: clang
+            style: false
+    env:
+      CC: ${{ matrix.cc }}
+      CFLAGS: -O2 -g -Werror
+      PICOM_API_CFLAGS: -I${{ github.workspace }}/picom/include
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch picom's API headers
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PICOM_REPOSITORY }}
+          ref: ${{ env.PICOM_REF }}
+          path: picom
+          sparse-checkout: include/picom
+
+      - name: Install the compiler and the libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.cc }} make pkg-config libxcb1-dev \
+            libxcb-randr0-dev
+
+      - name: Build
+        run: make
+
+      - uses: actions/setup-python@v5
+        if: matrix.style
+        with:
+          python-version: "3.x"
+
+      - name: Install clang-format and shellcheck
+        if: matrix.style
+        run: |
+          pip install clang-format==23.1.3
+          curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz |
+            tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v0.11.0" >>"$GITHUB_PATH"
+
+      - name: Check the formatting
+        if: matrix.style
+        run: |
+          clang-format --version
+          make format-check
+
+      - name: Lint
+        if: matrix.style
+        run: |
+          shellcheck --version
+          make lint
+
+  harness:
+    # tests/run.sh: picom with the plugin on a nested Xvfb with i3. Debian trixie has
+    # what it needs as packages: GCC 14, i3, and ImageMagick 7, whose magick command the
+    # harness uses.
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    timeout-minutes: 60
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git gcc make \
+            pkg-config meson ninja-build \
+            libconfig-dev libdbus-1-dev libegl-dev libev-dev libgl-dev libepoxy-dev \
+            libpcre2-dev libpixman-1-dev libx11-xcb-dev libxcb1-dev \
+            libxcb-composite0-dev libxcb-damage0-dev libxcb-glx0-dev libxcb-image0-dev \
+            libxcb-present-dev libxcb-randr0-dev libxcb-render0-dev \
+            libxcb-render-util0-dev libxcb-shape0-dev libxcb-sync-dev libxcb-util-dev \
+            libxcb-xfixes0-dev uthash-dev \
+            xvfb x11-xserver-utils x11-utils libgl1-mesa-dri libglx-mesa0 \
+            i3-wm xterm xdotool imagemagick dbus jq python3 \
+            xfonts-base fonts-dejavu-core
+
+      - uses: actions/checkout@v4
+
+      - name: Fetch the picom fork
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PICOM_REPOSITORY }}
+          ref: ${{ env.PICOM_REF }}
+          path: picom
+
+      - name: Build and install picom
+        run: |
+          meson setup --buildtype=release picom/build picom
+          ninja -C picom/build
+          ninja -C picom/build install
+
+      - name: Harness
+        run: make && PICOM=/usr/local/bin/picom tests/run.sh
+
+      - name: Keep the harness's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-logs
+          path: /tmp/wsdir-91/picom-wsdir

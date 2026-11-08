@@ -11,6 +11,8 @@
 # tests/picom-anim.conf, whose scripts don't read the variables, and checks the plugin
 # is loaded but never asked (the hook calls a provider only for scripts that read its
 # variable), and with a config without "open" animations to check the startup seed.
+# It also checks that the plugin's first log line is its version, and that make
+# uninstall removes what make install put in place.
 #
 # Phase 2: i3 is replaced by fakewm.c, a tiny stand-in window manager. It can spread one
 # workspace switch over several picom frames, and set up cases i3 won't produce on demand
@@ -220,8 +222,8 @@ expect() {
 	if [[ $GOT == "$want" ]]; then
 		pass "$name"
 	else
-		fail "$name" "expected: $(echo ${want:-nothing} | tr '\n' ' ')" \
-			"got:      $(echo ${GOT:-nothing} | tr '\n' ' ')"
+		fail "$name" "expected: $(tr '\n' ' ' <<<"${want:-nothing}")" \
+			"got:      $(tr '\n' ' ' <<<"${GOT:-nothing}")"
 	fi
 }
 
@@ -266,8 +268,8 @@ wait_until 10 xprop -root || die "Xvfb did not start"
 xrandr --setmonitor DPT 3440/800x1440/337+0+480 screen >/dev/null
 xrandr --setmonitor HDT 1080/300x1920/530+3440+0 none >/dev/null
 
-cc -O2 -Wall -o "$OUT/fakewm" "$HERE/fakewm.c" $(pkg-config --cflags --libs xcb) ||
-	die "cannot build fakewm"
+read -ra XCB_FLAGS <<<"$(pkg-config --cflags --libs xcb)"
+cc -O2 -Wall -o "$OUT/fakewm" "$HERE/fakewm.c" "${XCB_FLAGS[@]}" || die "cannot build fakewm"
 
 if "$PICOM" --config "$CONFIG" --diagnostics >"$OUT/diagnostics.out" 2>&1 &&
 	grep -q "Config file used: $CONFIG" "$OUT/diagnostics.out" &&
@@ -278,6 +280,22 @@ else
 fi
 if grep -q "plugin API is not compatible" "$OUT/diagnostics.out"; then
 	die "this picom has no animation variable hook (plugin API 0.2), see $OUT/diagnostics.out"
+fi
+# make uninstall takes away what make install put there.
+# Only what this run installs, not files an earlier run left there.
+rm -rf "$OUT/installed"
+make -s -C "$ROOT" install PICOM_CONFIG_DIR="$OUT/installed/xdg/picom" \
+	BINDIR="$OUT/installed/bin" MANDIR="$OUT/installed/man" >"$OUT/install.out" 2>&1
+installed=$(find "$OUT/installed/xdg" "$OUT/installed/bin" -type f 2>/dev/null | wc -l)
+make -s -C "$ROOT" uninstall PICOM_CONFIG_DIR="$OUT/installed/xdg/picom" \
+	BINDIR="$OUT/installed/bin" MANDIR="$OUT/installed/man" >>"$OUT/install.out" 2>&1
+left=$(find "$OUT/installed/xdg" "$OUT/installed/bin" "$OUT/installed/man" -type f 2>/dev/null)
+if ((installed > 0)) && [[ -z $left ]]; then
+	pass "make uninstall removes the $installed files make install put in place"
+else
+	mapfile -t left_files <<<"$left"
+	fail "make uninstall removes the files make install put in place" \
+		"installed $installed, left:" "${left_files[@]}"
 fi
 
 # --- phase 1: stock i3 ---
@@ -331,6 +349,14 @@ sleep 0.5
 echo "   desktops: $(xprop -root _NET_DESKTOP_NAMES | cut -d= -f2)"
 
 start_picom "$CONFIG" picom-i3
+
+# The plugin's first line in WS_DIRECTION_LOG, which is picom's log here, is its version.
+plugin_first=$(grep -m1 " ws_direction DEBUG \] " "$LOG" | sed -E 's/^\[[^]]*\] //')
+if [[ $plugin_first == "ws-direction "* ]]; then
+	pass "the plugin's first log line is its version ($plugin_first)"
+else
+	fail "the plugin's first log line is its version" "got: $plugin_first"
+fi
 
 i3_case "HDT 5->3 while the focus is on DPT, first switch after picom started" \
 	'workspace 3:Term' "ws5-a hide -1" "ws3-a show -1"
@@ -419,7 +445,7 @@ fast_case() {
 	if [[ -z $bad && $GOT == *"$first hide $sign"* && $GOT == *"$last show $sign"* ]]; then
 		pass "$name"
 	else
-		fail "$name" "got: $(echo $GOT)"
+		fail "$name" "got: $(tr '\n' ' ' <<<"$GOT")"
 	fi
 }
 for gap in 0.005 0.03 0.06; do
