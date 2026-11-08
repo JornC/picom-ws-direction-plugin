@@ -229,8 +229,12 @@ rules = ({
 .I wall.conf
 zooms out along the strip of workspaces of
 .IR pass\-zoom\-pan.conf .
-It draws hidden workspaces from the images picom keeps of them, which it asks for
-itself
+.I unfold.conf
+opens the box of
+.I cube.conf
+into a flat strip; like cube, it is best with picom's glx or egl backend.
+Both draw hidden workspaces from the images picom keeps of them, which they ask for
+themselves
 .RB ( keep\-image\-when\-hidden ).
 A workspace picom has not shown since it started has no images, and shows no windows.
 The plugin declares its triggers

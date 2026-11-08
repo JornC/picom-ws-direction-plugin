@@ -204,7 +204,8 @@ fonts.
 - `src/protocol.h`: what the plugin and the command share. `src/ws_direction.h`: the
   plugin's internal header.
 - `styles/`: the styles, and in `styles/parts/` the files they include: what a family of
-  styles shares (`axis.conf`, `switch.conf`, `zoom.conf`).
+  styles shares (`axis.conf`, `switch.conf`, `box.conf`, `zoom.conf`, `overview.conf`)
+  and the box of cube, flip and unfold (`prism.conf`, `prism-view.conf`).
 - `tests/showhide.conf`: a switch animation of show and hide only, which the harness
   checks the plugin's variables with.
 - `man/ws-direction.1`: the man page, in plain roff.

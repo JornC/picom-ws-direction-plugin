@@ -39,16 +39,17 @@
 # "open --wait --buttons" returns for the other buttons. With styles/cube.conf and
 # styles/flip.conf, slowed down, a screenshot partway through a switch shows the
 # workspaces in perspective, on their monitor, and not the back of the flip's card, and
-# check-frames.py checks every frame of those switches in picom's frame timing log. Then
-# every style runs as it ships, at its own length, through switches that interrupt each
-# other the same way and the other way, on both monitors (and with wall the overview
-# opened halfway into a switch), and check-frames.py checks every frame. Last it restarts
-# i3 and changes picom's config, which leave picom without images of the hidden
-# workspaces, and checks that the plugin gets them back by itself, with the screen, the
-# keyboard and the pointer frozen, that it puts the pointer back, and that it waits for a
-# window that paints itself late (tests/slowpaint.c). And that "ws-direction warm" gets
-# them back when asked, also at picom's start, and "warm --auto off" stops the plugin from
-# doing it by itself.
+# check-frames.py checks every frame of those switches in picom's frame timing log. With
+# styles/unfold.conf next to cube, the overview opens the box into a flat strip and closes
+# it again, and check-frames.py checks those frames too. Then every style runs as it
+# ships, at its own length, through switches that interrupt each other the same way and
+# the other way, on both monitors (and with wall and unfold the overview opened halfway
+# into a switch), and check-frames.py checks every frame. Last it restarts i3 and changes
+# picom's config, which leave picom without images of the hidden workspaces, and checks
+# that the plugin gets them back by itself, with the screen, the keyboard and the pointer
+# frozen, that it puts the pointer back, and that it waits for a window that paints itself
+# late (tests/slowpaint.c). And that "ws-direction warm" gets them back when asked, also
+# at picom's start, and "warm --auto off" stops the plugin from doing it by itself.
 # The harness runs on a D-Bus session bus of its own.
 #
 # Phase 2: i3 is replaced by fakewm.c, a tiny stand-in window manager. It can spread one
@@ -1725,12 +1726,113 @@ turn_case "screenshot: cube, DPT 1->2 halfway: 1 tips up and away, 2 comes up fr
 turn_case "screenshot: flip, DPT 1->2 a quarter in: the card tips over, its back (2) not drawn" \
 	flip 0.35 1000 1500
 
+# styles/unfold.conf next to cube.conf: the overview opens the box of workspaces up into a
+# flat strip. Unfolded, DPT's workspaces lie in a column, edge to edge, together 92% of
+# the monitor high (unfold.conf's var-fill), the shown one bright and the others at 70%.
+# Then check-frames.py checks every frame of opening, of a switch while it is open, and
+# of closing, also of a switch while it still opens and of closing while it still turns.
+{
+	echo "plugins = \"$PLUGIN\";"
+	echo 'backend = "glx";'
+	echo 'vsync = true;'
+	echo 'use-damage = true;'
+	echo 'unredir-if-possible = false;'
+	echo 'rules = ({'
+	echo "  match = \"!override_redirect && window_type = 'normal'\";"
+	cat "$ROOT/styles/cube.conf"
+	echo '}, {'
+	echo "  match = \"!override_redirect && window_type = 'normal'\";"
+	cat "$ROOT/styles/unfold.conf"
+	echo '});'
+} >"$OUT/unfold.conf"
+# strip_y FACES INDEX: the y of the middle of DPT's side INDEX when unfolded.
+strip_y() {
+	awk -v n="$1" -v i="$2" 'BEGIN { printf "%d\n", 1200 + 0.92 / n * (i - (n - 1) / 2) * 1440 }'
+}
+# unfold_case NAME MARK COLORS0 COLORS1: sides 0 (1:IDE, red) and 1 (2:Web, blue) of DPT,
+# unfolded, have one of COLORS0 and one of COLORS1 (one bright, one dim), and HDT is
+# untouched.
+unfold_case() {
+	local faces y0 y1 c0 c1 hdt
+	faces=$(tail -n +"$(($2 + 1))" "$LOG" | grep -m1 -oE 'ws-unfold of window .* face -?[0-9]+ of [0-9]+' |
+		sed -E 's/.* of ([0-9]+)$/\1/')
+	y0=$(strip_y "${faces:-1}" 0)
+	y1=$(strip_y "${faces:-1}" 1)
+	import -window root "$OUT/shot.png"
+	cp "$OUT/shot.png" "$OUT/shot-unfold-$SHOTS.png"
+	SHOTS=$((SHOTS + 1))
+	c0=$(pixel 1600 "$y0")
+	c1=$(pixel 1600 "$y1")
+	hdt=$(pixel 3900 900)
+	if [[ -n $faces ]] && is_color "$c0" "$3" && is_color "$c1" "$4" && [[ $hdt == "#00FF00" ]]; then
+		pass "$1 ($faces faces; side 0 $c0, side 1 $c1)"
+	else
+		fail "$1" "$faces faces; side 0 at y $y0: $c0, side 1 at y $y1: $c1, HDT $hdt"
+	fi
+}
+rm -f "$OUT/frames-unfold.csv"
+PICOM_DEBUG="frame_timing=$OUT/frames-unfold.csv;frame_layout=1" start_picom "$OUT/unfold.conf" picom-unfold
+for ws in 2:Web 4:Misc 7:Extra 5:Music 3:Term 1:IDE; do
+	i3cmd "workspace $ws"
+	sleep 0.6
+done
+sleep 1
+mark=$(log_mark)
+unfold open
+sleep 1.5
+unfold_case "unfold: DPT opens into a flat strip, 1:IDE bright, 2:Web dimmed, HDT untouched" \
+	"$mark" "#FF0000 #FF0000" "#0000B3 #0000B2"
+mark=$(log_mark)
+i3cmd 'workspace 2:Web'
+sleep 1.5
+unfold_case "unfold: switching while it is open moves the bright side to 2:Web" "$mark" \
+	"#B30000 #B20000" "#0000FF #0000FF"
+unfold close
+sleep 1.5
+import -window root "$OUT/shot.png"
+folded=$(pixel 1000 1200)
+if [[ $folded == "#0000FF" ]]; then
+	pass "unfold: closing folds the box with 2:Web in front, full size"
+else
+	fail "unfold: closing folds the box with 2:Web in front, full size" "pixel $folded"
+fi
+# A switch while the box still opens, and closing it while it still turns, for the frame
+# check below.
+unfold open
+sleep 0.15
+i3cmd 'workspace 4:Misc'
+sleep 0.2
+unfold close
+sleep 1.5
+i3cmd 'workspace 1:IDE'
+sleep 1
+# The sides are drawn through their corners: a click on 2:Web's side picks it there too.
+mark=$(log_mark)
+unfold open
+sleep 1
+faces=$(tail -n +"$((mark + 1))" "$LOG" | grep -m1 -oE 'ws-unfold of window .* face -?[0-9]+ of [0-9]+' |
+	sed -E 's/.* of ([0-9]+)$/\1/')
+xdotool mousemove 1600 "$(strip_y "${faces:-1}" 1)" click 1
+sleep 1.5
+import -window root "$OUT/shot.png"
+folded=$(pixel 1000 1200)
+if [[ $(focused_ws) == 2:Web && $folded == "#0000FF" ]]; then
+	pass "unfold: a click on 2:Web's side shows 2:Web full size"
+else
+	fail "unfold: a click on 2:Web's side shows 2:Web full size" \
+		"focus on $(focused_ws), pixel $folded; see $LOG"
+fi
+i3cmd 'workspace 1:IDE'
+sleep 1
+stop_picom
+check_frames "  (and every frame passes check-frames.py, the box in perspective)" "$OUT/frames-unfold.csv"
+
 # Every style as it ships, at its own length, through switches that interrupt each other
 # at 0.3 and 0.7 of a switch, the same way and the other way, on DPT and on HDT, which
-# turns sideways; with an overview style next to its switch style (wall to pass-zoom-pan),
-# the overview also opens halfway into a switch. check-frames.py checks every frame, with
-# --seams for the styles whose workspaces tile the monitor.
-declare -A OVERVIEW_OF=([pass-zoom-pan]=wall)
+# turns sideways; with an overview style next to its switch style (wall to pass-zoom-pan,
+# unfold to cube), the overview also opens halfway into a switch. check-frames.py checks
+# every frame, with --seams for the styles whose workspaces tile the monitor.
+declare -A OVERVIEW_OF=([pass-zoom-pan]=wall [cube]=unfold)
 # style_length STYLE: the style's var-length, in seconds.
 style_length() { sed -nE 's/.*var-length = ([0-9.]+);.*/\1/p' "$ROOT/styles/$1.conf" | head -n 1; }
 style_frames() {

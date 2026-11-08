@@ -7,7 +7,7 @@ tells them where a window's workspace is among the monitor's workspaces, for eff
 that draw the workspaces a switch passes, like a box of workspaces that turns. picom
 itself knows nothing about workspaces: the plugin reads the window manager's EWMH
 properties and hands the scripts sixteen numbers. What the scripts do with them is up
-to you; `styles/` has twelve switch styles and an overview to start from, and the
+to you; `styles/` has twelve switch styles and two overviews to start from, and the
 `ws-direction` command opens and closes the overview.
 
 ![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
@@ -31,14 +31,16 @@ makes them.
   fork this plugin is developed with. Upstream picom numbers its plugin API on its own
   (it is at 0.1); once it has these calls, the plugin will ask for upstream's number.
   The fork's `main` branch is picom's `next` branch plus one commit per feature, and is
-  not published yet. This version is tested at the fork ref that CI names in `PICOM_REF`.
+  not published yet. The cube, flip and unfold styles also need the fork's script
+  outputs that move a window's corners, and the tests need its frame layout log; its
+  `main` has both. This version is tested at the fork ref that CI names in `PICOM_REF`.
   Any other picom prints `ws-direction: picom's plugin API is not compatible` and runs
   without the variables, so every animation whose script reads one fails to load.
 - **X11**. The monitors come from RandR.
 - **An EWMH window manager.** It is tested with i3 only. See
   [Window manager integration](#window-manager-integration) for what the plugin needs
   from it.
-- For cube and flip, picom's glx or egl backend is best: xrender draws them in
+- For cube, flip and unfold, picom's glx or egl backend is best: xrender draws them in
   perspective too, but in tiles, which is slower (on Xvfb about a frame per 115 ms
   against 30 ms with glx), without the sampling that keeps squeezed text from
   shimmering, and with soft edges on a side drawn larger than its window.
@@ -159,6 +161,8 @@ part, for a slower switch. What a family of styles shares is in one file in
   or egl.
 - **wall**: not a switch style, but an overview. A key unfolds the monitor's workspaces
   into a strip of tiles that fits on the monitor, see [Overview styles](#overview-styles).
+- **unfold**: the overview for cube. A key opens the box of workspaces up into a flat
+  strip that fits on the monitor; like cube, it is best with glx or egl.
 
 Every switch style moves all workspaces of the monitor in a switch, through `ws-pass`: a
 switch that passes workspaces shows them on the way (going from 1 to 4, the windows of 2
@@ -187,13 +191,13 @@ change it in one place and styles that go together can't drift apart:
   [Workspaces a switch passes](#workspaces-a-switch-passes)), and what a switch is made
   of: `var-travel`, `var-face`, `var-start`, `var-end`, `var-time`, `var-pos`, `var-q`
   and `var-dip`.
-- `box.conf`, for cube and flip: `var-n` (the sides of the box) and `var-camera` (how far
-  the eye is, in sides).
+- `box.conf`, for cube, flip and unfold: `var-n` (the sides of the box) and `var-camera`
+  (how far the eye is, in sides), so the box that unfolds is the box that turns.
 - `zoom.conf`, for the zoom styles and wall: `var-zoom` and `var-gap`, so the overview's
   strip is the one the switches pan along.
-- `overview.conf`, for wall: `var-fill` and `var-dim`.
-- `prism.conf` and `prism-view.conf`: how cube and flip draw the box, and how far it
-  moves back in a switch.
+- `overview.conf`, for wall and unfold: `var-fill` and `var-dim`.
+- `prism.conf` and `prism-view.conf`: how cube, flip and unfold draw the box, and how far
+  it moves back in a switch.
 
 `make install` puts them next to the styles. To change one, copy it to
 `ws-direction/parts/` next to your `picom.conf` (`~/.config/picom/ws-direction/parts/`).
@@ -786,6 +790,14 @@ workspace the plugin didn't think was shown is a switch to it, and the plugin st
   falls with the time of the switch, and a spring's time is long, so near its end the
   share is small while the spring still passes a side. The side in front stays on the
   monitor all the same.
+- **cube, flip or unfold show all workspaces on top of each other.** That is a picom
+  without the fork's drawing in perspective, which draws every window flat where it is
+  and logs a warning once. The fork's `main` draws them in perspective on every backend,
+  with the window's shadow, blur and `frame-opacity` through the turn. On xrender it draws
+  a turned window in tiles, which is slower, and samples a side squeezed more than 2:1
+  plainly, so its text can shimmer; glx and egl sample it from smaller copies. On
+  xrender a side drawn larger than its window also has soft edges, over one of the
+  window's own pixels.
 - **Windows blink when you go back to a workspace while its windows still move away.**
   This happens with picom releases. When a window maps again, picom draws its new pixmap
   from the first damage on. On some drivers (seen on NVIDIA) the X server sends that
