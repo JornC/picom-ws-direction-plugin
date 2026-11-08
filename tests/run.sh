@@ -7,9 +7,9 @@
 # Setup: a nested Xvfb with two monitors (DPT 3440x1440 at +0+480, HDT 1080x1920 at
 # +3440+0). It checks that the command prints its version and exits 2 on wrong
 # arguments. Before any window manager runs, it checks with picom --diagnostics that
-# every style in styles/ loads without an animation-triggers line, and that a config
-# that still lists the plugin's triggers loads; and that make uninstall removes what
-# make install put in place, the man page too.
+# every style in styles/ loads without an animation-triggers line, and that cube and flip
+# load from where make install puts them; and that make uninstall removes what make
+# install put in place, the man page too.
 #
 # Phase 1: stock i3, xterms on several workspaces, and picom with the plugin,
 # tests/showhide.conf (a slide made of show and hide only) and debug logging. It checks that the plugin's first log line is its
@@ -31,15 +31,18 @@
 # pass of the switch, and that none of them starts a show or hide on top. Screenshots
 # partway through switches show the xterms of the workspaces passed on the monitor, in
 # order, but not an xterm whose place is still on the other monitor (placed 0), and that a
-# switch made while one runs carries the workspaces on as one strip. Then every style runs
-# as it ships, at its own length, through switches that interrupt each other the same way
-# and the other way, on both monitors, and check-frames.py checks every frame. Last it
-# restarts i3 and changes picom's config, which leave picom without images of the hidden
-# workspaces, and checks that the plugin gets them back by itself, with the screen, the
-# keyboard and the pointer frozen, that it puts the pointer back, and that it waits for a
-# window that paints itself late (tests/slowpaint.c). And that "ws-direction warm" gets
-# them back when asked, also at picom's start, and "warm --auto off" stops the plugin from
-# doing it by itself.
+# switch made while one runs carries the workspaces on as one strip. With styles/cube.conf
+# and styles/flip.conf, slowed down, a screenshot partway through a switch shows the
+# workspaces in perspective, on their monitor, and not the back of the flip's card, and
+# check-frames.py checks every frame of those switches in picom's frame timing log. Then
+# every style runs as it ships, at its own length, through switches that interrupt each
+# other the same way and the other way, on both monitors, and check-frames.py checks every
+# frame. Last it restarts i3 and changes picom's config, which leave picom without images
+# of the hidden workspaces, and checks that the plugin gets them back by itself, with the
+# screen, the keyboard and the pointer frozen, that it puts the pointer back, and that it
+# waits for a window that paints itself late (tests/slowpaint.c). And that "ws-direction
+# warm" gets them back when asked, also at picom's start, and "warm --auto off" stops the
+# plugin from doing it by itself.
 # The harness runs on a D-Bus session bus of its own.
 #
 # Phase 2: i3 is replaced by fakewm.c, a tiny stand-in window manager. It can spread one
@@ -186,10 +189,25 @@ PASS_LENGTH=4
 	sed -E "s/var-length = [0-9.]+;/var-length = $PASS_LENGTH;/" "$PASS_STYLE"
 	echo '});'
 } >"$OUT/pass-eased.conf"
-# The styles include ws-direction/parts/*.conf, which picom looks for next to the config
-# first, so the copy in $OUT is the one under test.
+# The cube and flip styles, as slow as pass.conf, with their own curves so that
+# check-frames.py judges them as they ship. They include ws-direction/parts/prism.conf,
+# which picom looks for next to the config first, so the copy in $OUT is the one under
+# test, also for the style checks below.
 mkdir -p "$OUT/ws-direction/parts"
 cp "$ROOT"/styles/parts/*.conf "$OUT/ws-direction/parts/"
+for style in cube flip; do
+	{
+		echo "plugins = \"$PLUGIN\";"
+		echo 'backend = "glx";'
+		echo 'vsync = true;'
+		echo 'use-damage = true;'
+		echo 'unredir-if-possible = false;'
+		echo 'rules = ({'
+		echo "  match = \"!override_redirect && window_type = 'normal'\";"
+		sed -E "s/var-length = [0-9.]+;/var-length = $PASS_LENGTH;/" "$ROOT/styles/$style.conf"
+		echo '});'
+	} >"$OUT/$style.conf"
+done
 # sleep_until T0 SECONDS: sleep until SECONDS after T0 (from date +%s.%N).
 sleep_until() {
 	local left
@@ -535,11 +553,34 @@ if [[ -z $bad_styles ]]; then
 else
 	fail "every style loads without an animation-triggers line" "failed:$bad_styles"
 fi
+# Installed by make install, cube and flip find their parts through picom's include
+# directories, with no copy next to picom.conf (and none in /etc/xdg).
 # Only what this run installs, not files an earlier run left there.
 rm -rf "$OUT/installed"
 mkdir -p "$OUT/installed/conf" "$OUT/installed/none"
-make -s -C "$ROOT" install PICOM_CONFIG_DIR="$OUT/installed/xdg/picom" \
-	BINDIR="$OUT/installed/bin" MANDIR="$OUT/installed/man" >"$OUT/install.out" 2>&1
+if make -s -C "$ROOT" install PICOM_CONFIG_DIR="$OUT/installed/xdg/picom" \
+	BINDIR="$OUT/installed/bin" MANDIR="$OUT/installed/man" >"$OUT/install.out" 2>&1; then
+	{
+		echo "plugins = \"$PLUGIN\";"
+		echo 'backend = "glx";'
+		echo 'rules = ({'
+		echo "  match = \"name = 'a'\";"
+		echo '  @include "ws-direction/cube.conf"'
+		echo '}, {'
+		echo "  match = \"name = 'b'\";"
+		echo '  @include "ws-direction/flip.conf"'
+		echo '});'
+	} >"$OUT/installed/conf/picom.conf"
+	XDG_CONFIG_HOME=$OUT/installed/xdg XDG_CONFIG_DIRS=$OUT/installed/none "$PICOM" \
+		--config "$OUT/installed/conf/picom.conf" --diagnostics >"$OUT/installed.out" 2>&1
+fi
+if grep -q "Config file used: $OUT/installed/conf/picom.conf" "$OUT/installed.out" 2>/dev/null &&
+	! grep -qiE "error.*(config|script|parse|line|trigger|include)|fatal" "$OUT/installed.out"; then
+	pass "cube and flip load as make install puts them, parts and all"
+else
+	fail "cube and flip load as make install puts them, parts and all" \
+		"see $OUT/install.out and $OUT/installed.out"
+fi
 # make uninstall takes away what make install put there, the man page too.
 installed=$(find "$OUT/installed/xdg" "$OUT/installed/bin" "$OUT/installed/man" -type f \
 	2>/dev/null | wc -l)
@@ -1303,6 +1344,78 @@ start_picom "$OUT/no-open.conf" picom-no-open
 i3_case "seed: first switch is HDT 3->5 while DPT shows 7, no open animations" \
 	'workspace 5:Music' "ws3-a hide 1"
 stop_picom
+
+# styles/cube.conf and styles/flip.conf put the workspaces on the sides of a box, or of a
+# card, and turn it in perspective. DPT is landscape, so they turn up and down: in 1->2,
+# 1 (red) turns up and away, and 2 (blue) comes up from below. A side's edge that is
+# further away is shorter. row_share Y COLOR: the share of DPT's row Y that is COLOR.
+row_share() { color_part 0 "$1" 3440 1 "$2"; }
+# turn_case NAME STYLE FRACTION RED-FAR RED-NEAR [BLUE-NEAR BLUE-FAR]: with STYLE, switch
+# DPT 1->2 and take a screenshot at FRACTION of the switch. The rows RED-FAR and RED-NEAR
+# of red, and BLUE-FAR and BLUE-NEAR of blue, are at least 40% that color, and the far one
+# has at least 5 points less of it (drawn flat, they would have the same). Without the
+# blue rows, no blue is drawn: the back of 2's side is turned toward us. HDT keeps its
+# color, and above DPT stays dark. Then more switches without screenshots: cube turns
+# HDT, which is portrait, so sideways; flip passes 2:Web from 1:IDE to 4:Misc. Last,
+# check-frames.py checks every frame of the switches in picom's frame timing log.
+turn_case() {
+	local name=$1 style=$2 t0 hdt0 hdt above got ok=1 y blue='' frames=$OUT/frames-$2.csv
+	rm -f "$frames"
+	PICOM_DEBUG="frame_timing=$frames;frame_layout=1" start_picom "$OUT/$style.conf" "picom-$style"
+	# picom keeps the image of 2:Web once it showed it.
+	i3cmd 'workspace 2:Web'
+	sleep "$(pass_time 1 1.1)"
+	i3cmd 'workspace 1:IDE'
+	sleep "$(pass_time 1 1.1)"
+	import -window root "$OUT/shot.png"
+	hdt0=$(pixel 3900 1000)
+	t0=$(date +%s.%N)
+	i3cmd 'workspace 2:Web'
+	sleep_until "$t0" "$(pass_time 1 "$3")"
+	import -window root "$OUT/shot.png"
+	cp "$OUT/shot.png" "$OUT/shot-$style.png"
+	hdt=$(pixel 3900 1000)
+	above=$(pixel 1000 300)
+	got="red rows $4: $(row_share "$4" FF0000)%, $5: $(row_share "$5" FF0000)%"
+	(($(row_share "$4" FF0000) >= 40 && $(row_share "$4" FF0000) + 5 <= $(row_share "$5" FF0000))) || ok=0
+	if (($# > 5)); then
+		got+=", blue rows $7: $(row_share "$7" 0000FF)%, $6: $(row_share "$6" 0000FF)%"
+		(($(row_share "$7" 0000FF) >= 40 && $(row_share "$7" 0000FF) + 5 <= $(row_share "$6" 0000FF))) || ok=0
+	else
+		for y in 700 1200 1700; do blue+=" $(row_share "$y" 0000FF)"; done
+		got+=", blue in rows 700 1200 1700:$blue"
+		[[ $blue == " 0 0 0" ]] || ok=0
+	fi
+	[[ $hdt == "$hdt0" && $above != "#FF0000" && $above != "#0000FF" ]] || ok=0
+	if ((ok)); then
+		pass "$name ($got)"
+	else
+		fail "$name" "$got; HDT $hdt0 -> $hdt, above DPT $above; see $OUT/shot-$style.png"
+	fi
+	sleep "$(pass_time 1 1)"
+	i3cmd 'workspace 1:IDE'
+	sleep "$(pass_time 1 1.1)"
+	if [[ $style == cube ]]; then
+		for ws in 5:Music 3:Term; do
+			i3cmd "workspace $ws"
+			sleep "$(pass_time 1 1.1)"
+		done
+		i3cmd 'focus output DPT'
+	else
+		for ws in 4:Misc 1:IDE; do
+			i3cmd "workspace $ws"
+			sleep "$(pass_time 2 1.1)"
+		done
+	fi
+	stop_picom
+	check_frames "frames: $style: no jumps or pops, ends at rest, the side in front on its monitor, in perspective, back faces not drawn, one prism" "$frames"
+}
+# DPT has six workspaces, so the box has six sides.
+turn_case "screenshot: cube, DPT 1->2 halfway: 1 tips up and away, 2 comes up from below, in perspective" \
+	cube 0.5 560 1120 1280 1840
+# On flip's curve, a quarter of the turn is done at 0.35 of the switch.
+turn_case "screenshot: flip, DPT 1->2 a quarter in: the card tips over, its back (2) not drawn" \
+	flip 0.35 1000 1500
 
 # Every style as it ships, at its own length, through switches that interrupt each other
 # at 0.3 and 0.7 of a switch, the same way and the other way, on DPT and on HDT, which

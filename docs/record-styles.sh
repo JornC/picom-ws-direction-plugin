@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Records every style with record-demo.sh and makes the GIFs in docs/: slide.gif, the
-# slide style on its own; styles.gif, all styles at once in a grid of COLS columns, each
-# with its name; and styles-slow.gif, the same grid slowed down to 1.2 s per switch, going
-# to the next workspace and back.
+# Records the styles in STYLES with record-demo.sh and makes the GIFs in docs/: slide.gif,
+# the slide style on its own; styles.gif, those styles at once in a grid of COLS columns,
+# each with its name; and styles-slow.gif, the same grid slowed down to 1.2 s per switch,
+# going to the next workspace and back. record-demo.sh uses picom's xrender backend,
+# which can't turn windows, so it can't record cube and flip.
 # Usage: make && docs/record-styles.sh WORKDIR
 set -eu
 WORK=$1

@@ -4,10 +4,11 @@ A [picom](https://github.com/yshui/picom) plugin that tells animation scripts wh
 workspace switch went, and which monitor a window's workspace is on. With it a `show` or
 `hide` animation can move windows the right way and keep them on their monitor. It also
 tells them where a window's workspace is among the monitor's workspaces, for effects
-that draw the workspaces a switch passes. picom itself knows nothing about workspaces:
-the plugin reads the window manager's EWMH properties and hands the scripts sixteen
-numbers. What the scripts do with them is up to you; `styles/` has ten switch styles to
-start from, and the `ws-direction` command opens and closes the overview.
+that draw the workspaces a switch passes, like a box of workspaces that turns. picom
+itself knows nothing about workspaces: the plugin reads the window manager's EWMH
+properties and hands the scripts sixteen numbers. What the scripts do with them is up
+to you; `styles/` has twelve switch styles to start from, and the `ws-direction`
+command opens and closes the overview.
 
 ![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
 horizontal on the portrait one](docs/slide.gif)
@@ -37,6 +38,10 @@ makes them.
 - **An EWMH window manager.** It is tested with i3 only. See
   [Window manager integration](#window-manager-integration) for what the plugin needs
   from it.
+- For cube and flip, picom's glx or egl backend is best: xrender draws them in
+  perspective too, but in tiles, which is slower (on Xvfb about a frame per 115 ms
+  against 30 ms with glx), without the sampling that keeps squeezed text from
+  shimmering, and with soft edges on a side drawn larger than its window.
 - To build: make, pkg-config, a C23 compiler (GCC 14 or clang 18 and later), and the
   headers of xcb, xcb-damage, xcb-randr and xcb-xfixes.
 
@@ -129,6 +134,12 @@ part, for a slower switch. What a family of styles shares is in one file in
   `var-length`, like pass-slide.
 - **pass-zoom-cascade**: pass-zoom-pan, but the windows of the new workspace trail behind
   it one after another, across the monitor, and all land as the view zooms back in.
+- **cube**: the workspaces are the sides of a box that turns, seen in perspective; a
+  switch that passes workspaces turns past them. The box has four sides, or one per
+  workspace when the monitor has more. It is best with glx or egl.
+- **flip**: the workspace turns over like a card, in perspective, with the new one on its
+  back; a switch that passes workspaces flips past them. Like cube, it is best with glx
+  or egl.
 
 Every switch style moves all workspaces of the monitor in a switch, through `ws-pass`: a
 switch that passes workspaces shows them on the way (going from 1 to 4, the windows of 2
@@ -157,7 +168,11 @@ change it in one place and styles that go together can't drift apart:
   [Workspaces a switch passes](#workspaces-a-switch-passes)), and what a switch is made
   of: `var-travel`, `var-face`, `var-start`, `var-end`, `var-time`, `var-pos`, `var-q`
   and `var-dip`.
+- `box.conf`, for cube and flip: `var-n` (the sides of the box) and `var-camera` (how far
+  the eye is, in sides).
 - `zoom.conf`, for the zoom styles: `var-zoom` and `var-gap`.
+- `prism.conf` and `prism-view.conf`: how cube and flip draw the box, and how far it
+  moves back in a switch.
 
 `make install` puts them next to the styles. To change one, copy it to
 `ws-direction/parts/` next to your `picom.conf` (`~/.config/picom/ws-direction/parts/`).
@@ -250,12 +265,12 @@ On every workspace switch the plugin starts the custom trigger `ws-pass` on all 
 the monitor of the switch: those of the old workspace, of the new one, of the workspaces
 the switch passes, which are those of the same monitor that sort between the two, and of
 the monitor's other workspaces. Going from 1 to 4 on a monitor with workspaces 1 to 5,
-those are the windows of 1, 2, 3 and 4, and of 5. The plugin starts them in the picom
-update pass in which it sees the switch, so they all start together. That matters
-because i3 sends the changes of a switch to the X server in more than one batch: picom
-often sees the old workspace hide one pass after the switch. A window that moves to the
-new workspace with the switch (`move container to workspace 4; workspace 4`) stays on
-screen, so it gets no `ws-pass`.
+those are the windows of 1, 2, 3 and 4, and of 5, which pass-slide keeps out of view and
+cube shows on the side next to 4. The plugin starts them in the picom update pass in which
+it sees the switch, so they all start together. That matters because i3 sends the changes
+of a switch to the X server in more than one batch: picom often sees the old workspace
+hide one pass after the switch. A window that moves to the new workspace with the switch
+(`move container to workspace 4; workspace 4`) stays on screen, so it gets no `ws-pass`.
 
 Every switch style does this. Without the plugin, picom logs an error about the style's
 `ws-pass` part. To write your own, follow
@@ -348,11 +363,11 @@ rule for their class with the same style:
 
     rules = ({
       match = "!override_redirect && window_type = 'normal'";
-      @include "ws-direction/slide.conf"
+      @include "ws-direction/cube.conf"
     }, {
       match = "class_g = 'ws-direction-backdrop'";
       keep-image-when-hidden = true;
-      @include "ws-direction/slide.conf"
+      @include "ws-direction/cube.conf"
     });
 
 In a style, don't take a backdrop's opacity from `window-mapped-opacity` alone, which is
@@ -706,6 +721,11 @@ workspace the plugin didn't think was shown is a switch to it, and the plugin st
   waits until the window drew all of itself after it showed, at most 0.5 s. A
   program that takes longer, or draws only part of its window, is kept as it was then
   until its workspace shows again.
+- **In cube with `var-interrupt = 2`, the box moves back and forth as a slow spring
+  passes sides.** In a switch the box stays back by a share (`var-dip`) that rises and
+  falls with the time of the switch, and a spring's time is long, so near its end the
+  share is small while the spring still passes a side. The side in front stays on the
+  monitor all the same.
 - **Windows blink when you go back to a workspace while its windows still move away.**
   This happens with picom releases. When a window maps again, picom draws its new pixmap
   from the first damage on. On some drivers (seen on NVIDIA) the X server sends that

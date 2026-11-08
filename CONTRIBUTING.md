@@ -226,7 +226,8 @@ fonts.
 - New files start with the SPDX line, `MPL-2.0`, as the others do.
 - A style explains itself in its header: what it looks like, how to use it, and the
   `var-*` you can change; a part says which `var-*` it sets and which it needs. What
-  styles share goes in a part, so it is set in one place.
+  styles share goes in a part, so it is set in one place. `tests/check-frames.py` reads
+  some `var-*` names of the prism styles; `styles/parts/prism-view.conf` lists them.
 
 ## Commits
 

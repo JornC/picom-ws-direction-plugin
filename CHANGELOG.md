@@ -47,6 +47,7 @@ Styles:
 - What a switch that interrupts another does is the user's choice: `var-interrupt` and
   `var-follow` in `parts/switch.conf`.
 - The pass styles pass-slide, pass-zoom-pan and pass-zoom-cascade.
+- cube and flip, turned in perspective through the corner outputs.
 
 Switch passes:
 
