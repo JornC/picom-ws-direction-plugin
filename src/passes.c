@@ -666,11 +666,18 @@ void ws_compute(const struct picom_animation_start *start,
 	if (c == NULL && !gone) {
 		c = ws_find_client_by_frame(start->window);
 	}
-	int64_t desktop = c != NULL ? c->desktop : -1;
+	// A backdrop has the variables of a window of its workspace.
+	auto backdrop = c == NULL ? ws_backdrop_workspace(start->window) : NULL;
+	int64_t desktop = backdrop != NULL ? ws_find_desktop(backdrop)
+	                  : c == NULL      ? -1
+	                                   : c->desktop;
 	struct ws_rect rect = wsd.screen;
-	bool known = gone ? false : c != NULL || ws_window_rect(start->window, &rect);
+	bool known = c != NULL || backdrop != NULL ||
+	             (!gone && ws_window_rect(start->window, &rect));
 	if (c != NULL) {
 		rect = c->rect;
+	} else if (backdrop != NULL && desktop >= 0) {
+		rect = ws_monitor_rect(ws_desktop_monitor((unsigned)desktop));
 	}
 	int monitor = desktop >= 0 ? ws_desktop_monitor((unsigned)desktop)
 	              : known      ? ws_rect_monitor(rect)
@@ -699,6 +706,8 @@ void ws_compute(const struct picom_animation_start *start,
 		reason = "window is gone";
 	} else if (desktop < 0) {
 		reason = "window is not on one workspace";
+	} else if ((show || hide) && c == NULL) {
+		reason = "a backdrop we show or hide";
 	} else if (show || hide) {
 		last = ws_find_switch(m, show ? c->last_show : c->last_hide);
 		first = last != NULL ? ws_find_switch(m, last->start) : NULL;
@@ -749,7 +758,7 @@ void ws_compute(const struct picom_animation_start *start,
 		placed = ws_rect_has_point(monitor_rect, rect.x1 + (rect.x2 - rect.x1) / 2,
 		                           rect.y1 + (rect.y2 - rect.y1) / 2);
 	}
-	auto faces = gone || !known ? 0 : n;
+	auto faces = known ? n : 0;
 	bool selected = wsd.current >= 0 && wsd.current < wsd.n_names &&
 	                ws_desktop_monitor((unsigned)wsd.current) == monitor;
 	auto index = desktop >= 0 ? ws_list_find(list, n, workspace) : 0;
@@ -771,6 +780,7 @@ void ws_compute(const struct picom_animation_start *start,
 	values[WS_VAR_INDEX] = index;
 	values[WS_VAR_SHOWN] = shown;
 	values[WS_VAR_UNFOLDED] = unfolded;
+	values[WS_VAR_BACKDROP] = backdrop != NULL;
 
 	if (wsd.log != NULL) {
 		// Measured before the name lookup, which only the log needs.
@@ -849,6 +859,10 @@ bool ws_start_passes(void) {
 			       "started %s on %u (in pass %llu)",
 			       first->from, last->to, members, trigger, started,
 			       (unsigned long long)wsd.frame);
+		}
+		auto backdrops = ws_backdrops_start(m, trigger, first->id, last->id);
+		if (backdrops > 0) {
+			ws_log("  and on %u backdrops", backdrops);
 		}
 		if (strcmp(trigger, WS_UNFOLD_TRIGGER) == 0) {
 			ws_overview_started(m);

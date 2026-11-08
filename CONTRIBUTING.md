@@ -70,8 +70,8 @@ Variables:
 workspace is on, the order of a monitor's workspaces, the steps of a switch, which
 workspace each monitor shows, which switch each show and hide is part of, and the
 variables, through `ws_compute`. They run in about 10 ms, without an X server. They link
-`desktop.o`, `passes.o` and `overview.o`; `tests/unit/fixture.c` stands in for
-`plugin.c` (the state, a log into a buffer and a fake clock), gives a picom API that
+`desktop.o`, `passes.o`, `overview.o` and `backdrop.o`; `tests/unit/fixture.c` stands in
+for `plugin.c` (the state, a log into a buffer and a fake clock), gives a picom API that
 records the animations started, and plays what a window manager does: maps, unmaps and
 changes of the current desktop, as the events a read takes in.
 
@@ -132,6 +132,7 @@ fonts.
 - `src/passes.c`: finds switches, starts `ws-pass`, and works out the variables.
 - `src/overview.c`: unfolds and folds the overview, takes the clicks, and does the
   commands.
+- `src/backdrop.c`: the backdrops, one window per workspace.
 - `src/cmd.c`: the `ws-direction` command.
 - `src/protocol.h`: what the plugin and the command share. `src/ws_direction.h`: the
   plugin's internal header.

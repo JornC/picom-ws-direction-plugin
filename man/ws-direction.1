@@ -133,6 +133,17 @@ button 2 to 9 was pressed while a monitor was unfolded.
 The X display to talk to.
 It must be the display picom runs on.
 .TP
+.B WS_DIRECTION_BACKDROP
+Set it in picom's environment for the plugin's backdrops, one window per workspace that
+styles can draw behind its windows:
+.B wallpaper
+paints them with the wallpaper, a color
+.B #RRGGBB
+with that color.
+Unset, or
+.BR none ,
+there are none.
+.TP
 .B WS_DIRECTION_LOG
 Set it in picom's environment, not the command's, to a file, and the plugin logs every
 decision there, in picom's log format.

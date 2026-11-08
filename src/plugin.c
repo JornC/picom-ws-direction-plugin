@@ -6,8 +6,9 @@
 /// crop to it, and where the window's workspace is among the monitor's workspaces, so
 /// they can draw the workspaces a switch passes. Its animation variables are
 /// plugin-ws-direction-direction, -distance, -monitor-x, -monitor-y, -monitor-width,
-/// -monitor-height, -faces, -face, -selected, -placed, -index, -shown and -unfolded (enum
-/// ws_variable). The README, under Reference, and the man page say what each one is.
+/// -monitor-height, -faces, -face, -selected, -placed, -index, -shown, -unfolded and
+/// -backdrop (enum ws_variable). The README, under Reference, and the man page say what
+/// each one is.
 ///
 /// A window is on one workspace if the window manager lists it in _NET_CLIENT_LIST, its
 /// _NET_WM_DESKTOP names one desktop, and it doesn't have _NET_WM_STATE_HIDDEN (i3 sets
@@ -16,8 +17,8 @@
 /// For workspaces it only uses EWMH data the window manager already sets:
 /// _NET_CURRENT_DESKTOP, _NET_DESKTOP_NAMES, _NET_DESKTOP_VIEWPORT and _NET_CLIENT_LIST
 /// on the root window, and _NET_WM_DESKTOP and _NET_WM_STATE on client windows, and the
-/// _NET_ACTIVE_WINDOW request that pagers send. Monitors come from RandR, a window's
-/// place from GetGeometry and TranslateCoordinates.
+/// _NET_CURRENT_DESKTOP and _NET_ACTIVE_WINDOW requests that pagers send. Monitors come
+/// from RandR, a window's place from GetGeometry and TranslateCoordinates.
 ///
 /// The order in which a window manager changes these properties and maps and unmaps
 /// windows is not specified, and those changes can reach picom over several frames. So we
@@ -77,6 +78,7 @@ static const char *const ws_variable_names[] = {
     [WS_VAR_INDEX] = "index",
     [WS_VAR_SHOWN] = "shown",
     [WS_VAR_UNFOLDED] = "unfolded",
+    [WS_VAR_BACKDROP] = "backdrop",
 };
 static_assert(sizeof(ws_variable_names) / sizeof(ws_variable_names[0]) == WS_N_VARIABLES,
               "every variable needs a name");
@@ -134,13 +136,14 @@ static double ws_provide(const struct picom_animation_start *start, void *user_d
 }
 
 /// Whether xcb has an event of ours in its queue, which it read while we waited for a
-/// reply, or we took one that the next read must take in, or a command waits. picom asks
-/// before it sleeps, see add_wakeup_fd.
+/// reply, we took one that the next read must take in, or a backdrop waits for picom to
+/// have its image. picom asks before it sleeps, see add_wakeup_fd.
 static bool ws_pending([[maybe_unused]] void *user_data) {
 	if (wsd.queued == NULL) {
 		wsd.queued = xcb_poll_for_queued_event(wsd.c);
 	}
-	return wsd.queued != NULL || wsd.read.needed || wsd.n_commands > 0;
+	return wsd.queued != NULL || wsd.read.needed || wsd.n_commands > 0 ||
+	       ws_backdrops_showing();
 }
 
 static xcb_generic_event_t *ws_next_event(void) {
@@ -175,6 +178,11 @@ void ws_take_events(void) {
 			            e->atom == wsd.a_desktop_viewport ||
 			            e->atom == wsd.a_client_list;
 			wsd.read.needed |= root;
+			if (e->window == wsd.root &&
+			    (e->atom == wsd.a_rootpmap || e->atom == wsd.a_setroot)) {
+				wsd.wallpaper_changed = true;
+				wsd.read.needed = true;
+			}
 			break;
 		}
 		case XCB_CLIENT_MESSAGE: {
@@ -210,8 +218,10 @@ void ws_take_events(void) {
 		case XCB_GRAVITY_NOTIFY:
 		case XCB_CIRCULATE_NOTIFY:
 			// A move or a restack changes no workspace, and a start reads for
-			// itself. The overview's input windows follow the stack.
-			wsd.read.needed |= ws_any_unfolded();
+			// itself. The overview's input windows follow the stack, and the
+			// backdrops the monitors, which a window manager may change by
+			// moving windows only.
+			wsd.read.needed |= ws_any_unfolded() || !wsd.backdrops_off;
 			break;
 		case XCB_BUTTON_PRESS:
 		case XCB_BUTTON_RELEASE: {
@@ -265,6 +275,7 @@ static void ws_frame(uint64_t frame, [[maybe_unused]] void *user_data) {
 			wsd.api->pause_screen("plugin-ws-direction", 0, 0);
 		}
 		ws_place_inputs();
+		ws_backdrops_update();
 	}
 	// A read that picom's provider made, after the callback of its pass, may have
 	// recorded switches too.
@@ -286,6 +297,7 @@ static void ws_frame(uint64_t frame, [[maybe_unused]] void *user_data) {
 			ws_pick();
 		}
 	}
+	ws_backdrops_advance();
 }
 
 __attribute__((constructor)) static void ws_init(void) {
@@ -368,6 +380,13 @@ __attribute__((constructor)) static void ws_init(void) {
 			ws_fail("could not add plugin-ws-direction-%s", ws_variable_names[i]);
 			return;
 		}
+	}
+	// So the first pass reads again, and makes the backdrops.
+	wsd.read.needed = true;
+	if (!ws_backdrops_init()) {
+		ws_fail("WS_DIRECTION_BACKDROP is \"%s\", not wallpaper, none or a color "
+		        "#RRGGBB: no backdrops",
+		        getenv("WS_DIRECTION_BACKDROP"));
 	}
 	if (!ws_overview_init(screen_num)) {
 		ws_fail("another program owns the selection " WS_SELECTION_PREFIX "%d, "

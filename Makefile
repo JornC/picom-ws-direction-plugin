@@ -63,7 +63,7 @@ build/%.o: src/%.c
 # The unit tests check the logic that works on the plugin's state, without an X server.
 # They link the modules that hold it; tests/unit/fixture.c stands in for plugin.c.
 UNIT_OBJS = $(patsubst tests/unit/%.c,build/unit/%.o,$(wildcard tests/unit/*.c))
-UNIT_MODULES = build/desktop.o build/passes.o build/overview.o
+UNIT_MODULES = build/desktop.o build/passes.o build/overview.o build/backdrop.o
 
 build/unit/%.o: tests/unit/%.c
 	@mkdir -p build/unit

@@ -62,9 +62,12 @@ static void ws_start_on_monitor(struct ws_monitor *m, const char *trigger) {
 			m->waiting[m->n_waiting++] = c->id;
 		}
 	}
+	auto backdrops = ws_backdrops_start(m, trigger, 0, 0);
 	auto r = ws_monitor_rect(index);
-	ws_log("Monitor at %d,%d: started %s on %u of %u windows (in pass %llu)", r.x1,
-	       r.y1, trigger, started, members, (unsigned long long)wsd.frame);
+	ws_log(
+	    "Monitor at %d,%d: started %s on %u of %u windows and %u backdrops (in pass "
+	    "%llu)",
+	    r.x1, r.y1, trigger, started, members, backdrops, (unsigned long long)wsd.frame);
 	if (unfold) {
 		ws_overview_started(m);
 	}
@@ -328,6 +331,21 @@ static void ws_request_window(xcb_window_t w, xcb_timestamp_t time) {
 	xcb_flush(wsd.c);
 }
 
+/// Ask the window manager to show desktop `desktop`, with the EWMH request pagers send.
+static void ws_request_desktop(unsigned desktop, xcb_timestamp_t time) {
+	xcb_client_message_event_t event = {
+	    .response_type = XCB_CLIENT_MESSAGE,
+	    .format = 32,
+	    .window = wsd.root,
+	    .type = wsd.a_current_desktop,
+	    .data.data32 = {desktop, time},
+	};
+	xcb_send_event(wsd.c, 0, wsd.root,
+	               XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT,
+	               (const char *)&event);
+	xcb_flush(wsd.c);
+}
+
 /// A click while a monitor is unfolded: pick the window that picom drew there, if it is
 /// on a workspace of an unfolded monitor. The other unfolded monitors fold at once. Its
 /// monitor folds when its workspace shows, at once if it shows already;
@@ -336,7 +354,8 @@ void ws_pick(void) {
 	uint32_t client = XCB_NONE;
 	uint32_t window = wsd.api->window_at(wsd.click.x, wsd.click.y, &client);
 	auto c = client != XCB_NONE ? ws_find_client(client) : NULL;
-	const char *workspace = c != NULL ? c->workspace : NULL;
+	// A backdrop picks its workspace.
+	const char *workspace = c != NULL ? c->workspace : ws_backdrop_workspace(window);
 	auto desktop = ws_find_desktop(workspace);
 	auto m = desktop >= 0 ? ws_monitor_of((unsigned)desktop) : NULL;
 	if (m == NULL || !m->unfolded) {
@@ -345,9 +364,17 @@ void ws_pick(void) {
 		       wsd.click.x, wsd.click.y, window, client);
 		return;
 	}
-	ws_log("Unfold: the click at %d,%d picks window %#010x of workspace \"%s\"",
-	       wsd.click.x, wsd.click.y, client, workspace);
-	ws_request_window(client, wsd.click.time);
+	if (c != NULL) {
+		ws_log("Unfold: the click at %d,%d picks window %#010x of workspace "
+		       "\"%s\"",
+		       wsd.click.x, wsd.click.y, client, workspace);
+		ws_request_window(client, wsd.click.time);
+	} else {
+		ws_log("Unfold: the click at %d,%d picks workspace \"%s\" by its "
+		       "backdrop",
+		       wsd.click.x, wsd.click.y, workspace);
+		ws_request_desktop((unsigned)desktop, wsd.click.time);
+	}
 	for (unsigned i = 0; i < wsd.n_tracked; i++) {
 		auto other = &wsd.tracked[i];
 		if (other != m && other->unfolded) {

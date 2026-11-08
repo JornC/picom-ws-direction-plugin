@@ -265,6 +265,7 @@ static struct fx_values compute(struct picom_animation_start start) {
 	    .index = v[WS_VAR_INDEX],
 	    .shown = v[WS_VAR_SHOWN],
 	    .unfolded = v[WS_VAR_UNFOLDED],
+	    .backdrop = v[WS_VAR_BACKDROP],
 	};
 }
 

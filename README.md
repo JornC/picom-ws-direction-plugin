@@ -5,7 +5,7 @@ workspace switch went, and which monitor a window's workspace is on. With it a `
 `hide` animation can move windows the right way and keep them on their monitor. It also
 tells them where a window's workspace is among the monitor's workspaces, for effects
 that draw the workspaces a switch passes. picom itself knows nothing about workspaces:
-the plugin reads the window manager's EWMH properties and hands the scripts thirteen
+the plugin reads the window manager's EWMH properties and hands the scripts fourteen
 numbers. What the scripts do with them is up to you; `styles/` has seven switch styles
 to start from, and the `ws-direction` command opens and closes the overview.
 
@@ -213,6 +213,42 @@ and without it they would start over.
 picom ignores a start on a window it has no image of yet, and on a window whose rule has
 no `ws-pass` animation. Such a window gets its `show` or `hide` as usual.
 
+### Backdrops
+
+With `WS_DIRECTION_BACKDROP` set in picom's environment (see
+[Environment](#environment)), the plugin keeps a backdrop for every workspace: a window
+of its own, the size of the workspace's monitor, painted with the part of the wallpaper
+under that monitor (from `_XROOTPMAP_ID`, or `_XSETROOT_ID`), or with a color. It starts `ws-pass`, `ws-unfold` and `ws-fold` on the
+backdrops of a monitor's workspaces together with their windows, and a backdrop gets the
+variables of a window of its workspace. So a style can draw a face's background, like
+the wallpaper on each side of a cube, and in the overview a click on an empty part of a
+tile, or on the tile of an empty workspace, picks that workspace, because picom finds
+the backdrop there (window_at).
+
+A backdrop is a hidden window, stacked below every other window. The plugin maps it only
+for a moment, with the least `_NET_WM_WINDOW_OPACITY` there is, so picom gets an image of
+it, and hides it again; it does that again when its monitor or the wallpaper changes.
+picom draws a hidden window only in an animation, and only
+if its rule keeps its image. So a style that doesn't want backdrops just has no rule for
+them, and never sees them. Each kept backdrop takes as much memory as a window the size
+of its monitor; without `WS_DIRECTION_BACKDROP` there are none. To draw them, add a
+rule for their class with the same style:
+
+    rules = ({
+      match = "!override_redirect && window_type = 'normal'";
+      @include "ws-direction/slide.conf"
+    }, {
+      match = "class_g = 'ws-direction-backdrop'";
+      keep-image-when-hidden = true;
+      @include "ws-direction/slide.conf"
+    });
+
+In a style, don't take a backdrop's opacity from `window-mapped-opacity` alone, which is
+about 0 for it: draw it at `max(window-mapped-opacity, plugin-ws-direction-backdrop)`.
+Their name is `ws-direction backdrop <workspace>`. As they are at the bottom of the
+stack, a desktop window that the window manager also puts at the bottom may be drawn
+over them.
+
 ## Reference
 
 ### Variables
@@ -279,6 +315,11 @@ no `ws-pass` animation. Such a window gets its `show` or `hide` as usual.
 `plugin-ws-direction-unfolded`
 : 1 while that monitor is unfolded into an overview, else 0.
 
+`plugin-ws-direction-backdrop`
+: 1 for the plugin's backdrop windows (see [Backdrops](#backdrops)), else 0. The plugin
+  maps a backdrop with the least opacity, so it never shows outside an animation; the
+  shipped styles draw it at `max(window-mapped-opacity, plugin-ws-direction-backdrop)`.
+
 The workspaces of a monitor are in the order of `_NET_DESKTOP_NAMES`. Under i3 that is
 their order on the output: by number, with unnumbered names after them. A window is on
 one workspace if the window
@@ -297,6 +338,9 @@ animation for the trigger, or that it has no image of.
 : On every workspace switch, on every window of the monitor of the switch, in the pass in
   which the plugin sees the switch; not on a window that moved to the new workspace with
   the switch. See [Workspaces a switch passes](#workspaces-a-switch-passes).
+
+All three start on the backdrops of the monitor's workspaces too (see
+[Backdrops](#backdrops)).
 
 `ws-unfold`
 : When the overview opens on a monitor, on every window of that monitor's workspaces and
@@ -358,6 +402,11 @@ has the details.
 `WS_DIRECTION_LOG`
 : Set it in picom's environment to a file, and the plugin logs every decision there, in
   picom's log format. The first line is `ws-direction <version>`.
+
+`WS_DIRECTION_BACKDROP`
+: Set it in picom's environment for backdrops (see [Backdrops](#backdrops)): `wallpaper`
+  paints them with the wallpaper, a color `#RRGGBB` with that color. Unset, or `none`,
+  there are none.
 
 `DISPLAY`
 : The plugin connects to the display it names, like picom itself, and so does the

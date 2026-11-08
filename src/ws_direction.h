@@ -5,8 +5,8 @@
 /// one of its modules uses, or the unit tests in tests/unit. desktop.c reads the
 /// monitors, the workspaces and the managed windows from the X server. passes.c finds
 /// switches, starts ws-pass and works out the variables. overview.c unfolds and folds the
-/// overview, and does the commands. plugin.c hooks them up to picom and calls them in
-/// every pass.
+/// overview, and does the commands. backdrop.c keeps a backdrop window per workspace.
+/// plugin.c hooks them up to picom and calls them in every pass.
 
 #pragma once
 
@@ -55,6 +55,7 @@ enum ws_variable {
 	WS_VAR_INDEX,
 	WS_VAR_SHOWN,
 	WS_VAR_UNFOLDED,
+	WS_VAR_BACKDROP,
 	WS_N_VARIABLES,
 };
 
@@ -199,8 +200,9 @@ struct ws_root_requests {
 /// the list, and for the desktop names and the current desktop again.
 enum ws_read_step { WS_READ_IDLE, WS_READ_ROOT, WS_READ_WINDOWS };
 
-// Defined in desktop.c, the only module that looks inside it.
+// Defined in desktop.c and backdrop.c, the only modules that look inside them.
 struct ws_window_requests;
+struct ws_backdrop;
 
 /// Everything the plugin knows, defined in plugin.c.
 struct ws_state {
@@ -279,6 +281,14 @@ struct ws_state {
 	/// read takes in.
 	struct ws_event *events;
 	unsigned n_events;
+	/// The backdrops, one per workspace (backdrop.c), the atoms they need, the color
+	/// they have (-1 for the wallpaper), whether there are none, and whether the
+	/// wallpaper changed since we last painted them.
+	struct ws_backdrop *backdrops;
+	unsigned n_backdrops;
+	xcb_atom_t a_rootpmap, a_setroot, a_opacity;
+	int64_t backdrop_color;
+	bool backdrops_off, wallpaper_changed;
 	/// The animations we started in this pass, and why.
 	struct ws_start *starts;
 	unsigned n_starts;
@@ -356,7 +366,17 @@ void ws_compute(const struct picom_animation_start *start,
                 double values[static WS_N_VARIABLES]);
 bool ws_start_passes(void);
 
+// backdrop.c
+bool ws_backdrops_init(void);
+const char *ws_backdrop_workspace(xcb_window_t w);
+void ws_backdrops_update(void);
+void ws_backdrops_advance(void);
+bool ws_backdrops_showing(void);
+unsigned ws_backdrops_start(const struct ws_monitor *m, const char *trigger,
+                            uint64_t first, uint64_t last);
+
 // overview.c
+
 bool ws_any_unfolded(void);
 void ws_answer(xcb_window_t w, uint32_t code, uint32_t detail);
 void ws_pick_done(void);

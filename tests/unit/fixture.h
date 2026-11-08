@@ -34,7 +34,7 @@ extern unsigned test_n_starts;
 /// The variables ws_compute works out for a window, by name.
 struct fx_values {
 	double direction, distance, x, y, width, height, faces, face, selected, placed,
-	    index, shown, unfolded;
+	    index, shown, unfolded, backdrop;
 };
 
 /// Forget everything: no monitors, workspaces or windows, a screen of 4520x1920.
