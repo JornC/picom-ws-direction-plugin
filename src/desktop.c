@@ -3,6 +3,16 @@
 
 /// The desktop picture: the monitors, the workspaces and the managed windows, read from
 /// the X server.
+///
+/// In a pass in which nothing changed, the frame callback only takes what the X server
+/// already sent us, without waiting. Each read costs two round trips to the X server, on
+/// picom's main thread: one for the root window and the list of managed windows, one for
+/// the desktop, state and place of each managed window. Later starts in the same pass
+/// cost none, except for a window the window manager doesn't manage: one more for its
+/// place. Usually a round trip is well under a millisecond, but the reply waits behind
+/// whatever the server is doing (other clients, the window manager's own burst of
+/// requests during a switch, picom's drawing of the previous frame), so it can take tens
+/// of milliseconds.
 
 #include <stdlib.h>
 #include <string.h>
@@ -130,17 +140,49 @@ static int64_t ws_window_desktop(xcb_window_t w) {
 }
 
 /// Ask for _NET_CLIENT_LIST. Pair with ws_read_clients.
-xcb_get_property_cookie_t ws_client_list_request(void) {
+static xcb_get_property_cookie_t ws_client_list_request(void) {
 	return ws_prop_request(wsd.root, wsd.a_client_list, XCB_ATOM_WINDOW, UINT32_MAX / 4);
+}
+
+static const struct ws_client *
+ws_find_client_in(const struct ws_client *clients, unsigned n, xcb_window_t id) {
+	for (unsigned i = 0; i < n; i++) {
+		if (clients[i].id == id) {
+			return &clients[i];
+		}
+	}
+	return NULL;
+}
+
+const struct ws_client *ws_find_client(xcb_window_t id) {
+	return ws_find_client_in(wsd.clients, wsd.n_clients, id);
+}
+
+static void ws_free_clients(struct ws_client *clients, unsigned n) {
+	for (unsigned i = 0; i < n; i++) {
+		free(clients[i].workspace);
+	}
+	free(clients);
+}
+
+/// Whether a window that was `before` at the read before, and is on workspace
+/// `workspace` now, moved from one workspace to another.
+static bool ws_moved(const struct ws_client *before, const char *workspace) {
+	return before != NULL && before->workspace != NULL && workspace != NULL &&
+	       strcmp(before->workspace, workspace) != 0;
 }
 
 /// Take the reply to ws_client_list_request, then read the desktop, the state and the
 /// place of every managed window, all in one more round trip.
-void ws_read_clients(xcb_get_property_cookie_t list_request) {
+static void ws_read_clients(xcb_get_property_cookie_t list_request) {
 	auto list = ws_prop_reply(list_request);
+	auto old = wsd.clients;
+	auto n_old = wsd.n_clients;
+	wsd.clients = NULL;
 	wsd.n_clients = 0;
 	if (list == NULL || list->format != 32) {
 		free(list);
+		ws_free_clients(old, n_old);
 		return;
 	}
 	auto n = (unsigned)xcb_get_property_value_length(list) / 4;
@@ -150,7 +192,7 @@ void ws_read_clients(xcb_get_property_cookie_t list_request) {
 		xcb_get_geometry_cookie_t geometry;
 		xcb_translate_coordinates_cookie_t origin;
 	} *requests = calloc(n, sizeof(*requests));
-	wsd.clients = realloc(wsd.clients, n * sizeof(*wsd.clients));
+	wsd.clients = malloc(n * sizeof(*wsd.clients));
 	if (requests == NULL || wsd.clients == NULL) {
 		abort();
 	}
@@ -179,6 +221,10 @@ void ws_read_clients(xcb_get_property_cookie_t list_request) {
 		xcb_translate_coordinates_reply_t *origin =
 		    ws_reply(requests[i].origin.sequence);
 		if (g != NULL && origin != NULL) {
+			char *workspace = desktop >= 0 ? strdup(wsd.names[desktop]) : NULL;
+			if (desktop >= 0 && workspace == NULL) {
+				abort();
+			}
 			wsd.clients[wsd.n_clients++] = (struct ws_client){
 			    .id = ids[i],
 			    .desktop = desktop,
@@ -186,6 +232,8 @@ void ws_read_clients(xcb_get_property_cookie_t list_request) {
 			             .y1 = origin->dst_y,
 			             .x2 = origin->dst_x + g->width,
 			             .y2 = origin->dst_y + g->height},
+			    .workspace = workspace,
+			    .moved = ws_moved(ws_find_client_in(old, n_old, ids[i]), workspace),
 			};
 		}
 		free(g);
@@ -193,20 +241,12 @@ void ws_read_clients(xcb_get_property_cookie_t list_request) {
 	}
 	free(requests);
 	free(list);
-}
-
-const struct ws_client *ws_find_client(xcb_window_t id) {
-	for (unsigned i = 0; i < wsd.n_clients; i++) {
-		if (wsd.clients[i].id == id) {
-			return &wsd.clients[i];
-		}
-	}
-	return NULL;
+	ws_free_clients(old, n_old);
 }
 
 /// Ask for the root window properties, the screen size and the monitors. Pair with
 /// ws_read_root_reply.
-struct ws_root_requests ws_read_root_request(void) {
+static struct ws_root_requests ws_read_root_request(void) {
 	return (struct ws_root_requests){
 	    .current = ws_prop_request(wsd.root, wsd.a_current_desktop, XCB_ATOM_CARDINAL, 1),
 	    .viewports = ws_prop_request(wsd.root, wsd.a_desktop_viewport,
@@ -349,4 +389,14 @@ void ws_seed_from_windows(void) {
 		}
 	}
 	free(tree);
+}
+
+/// Read the root window and the managed windows again, in two round trips, and record a
+/// switch if the monitor of the current desktop now shows another workspace.
+void ws_read(void) {
+	auto root = ws_read_root_request();
+	auto clients = ws_client_list_request();
+	wsd.read_frame = wsd.frame;
+	ws_refresh(root);
+	ws_read_clients(clients);
 }

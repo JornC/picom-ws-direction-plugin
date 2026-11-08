@@ -21,12 +21,14 @@ makes them.
 
 ## Requirements
 
-- **picom with plugin API 0.2 of the picom fork**: the animation variable hook. No picom
-  release has it yet. It is proposed to picom upstream, and the picom fork this plugin
-  is developed with has it. Upstream picom numbers its plugin API on its own (it is at
-  0.1); once it has the hook, the plugin will ask for upstream's number. Any other picom
-  prints `ws-direction: picom's plugin API is not compatible` and runs without the
-  variables, so every animation whose script reads one fails to load.
+- **picom with plugin API 0.4 of the picom fork**: the animation variable hook, frame
+  callbacks that can start animations, and custom triggers a plugin declares. No picom
+  release has it yet. Its first part, the animation variable hook, is proposed to picom
+  upstream; the rest is only in the picom fork this plugin is developed with. Upstream
+  picom numbers its plugin API on its own (it is at 0.1); once it has these calls, the
+  plugin will ask for upstream's number. Any other picom prints `ws-direction: picom's
+  plugin API is not compatible` and runs without the variables, so every animation
+  whose script reads one fails to load.
 - **X11**. The monitors come from RandR.
 - **An EWMH window manager.** It is tested with i3 only. See
   [Window manager integration](#window-manager-integration) for what the plugin needs
@@ -75,6 +77,8 @@ In `picom.conf`, load the plugin and include a style in a rule:
 
 To check that it works:
 
+- `picom --diagnostics` lists `ws-pass` under "Custom animation triggers" when picom
+  loaded the plugin: the plugin declares it.
 - Start picom with `WS_DIRECTION_LOG=/path/to/file` in its environment. The plugin writes
   `ws-direction <version>` there when picom loads it, and then a line for every switch it
   sees and for every animation that reads its variables, with the values and why. If the
@@ -112,6 +116,34 @@ there. A copy in `~/.config/picom/include/ws-direction/` also wins over the pack
 but `make install` overwrites it. Save `picom.conf` once after you make a copy: picom
 reloads when a file it read changes, and it didn't read the new copy yet.
 
+## Hidden workspaces
+
+An effect that turns through all workspaces, like a cube, has to draw the windows of
+workspaces that are not shown. That needs two picom features that are not in picom's
+`next` branch yet: the rule option `keep-image-when-hidden`, and custom animation
+triggers, which the plugin declares and starts (and the D-Bus method `StartAnimations`
+can start). Both are on the fork's `main` branch.
+
+- **Kept images.** With `keep-image-when-hidden = true` in a window's rule, picom keeps
+  the window's last image while it is hidden. Every style sets it itself. Each kept
+  image takes as much memory as the window on screen: a hidden workspace full of
+  windows takes about as much as one screen of its monitor.
+- **Old pictures.** A hidden window is drawn as it looked when its workspace was last
+  shown. A clock shows the old time. When its workspace shows again, it keeps that
+  picture until the program drew all of the window, or until the window's animation
+  ends; a program that redraws only part of it changes at the end of the switch.
+- **Empty at first.** After picom starts, it has no image of the windows of a hidden
+  workspace until the workspace is shown once. Neither has it of a window that opens on a
+  hidden workspace. Only windows move, and the wallpaper stays where it is, so in a
+  switch such a workspace passes as plain wallpaper, as does a workspace without
+  windows.
+- **Fullscreen and unredirect.** When picom unredirects the screen, it drops every kept
+  image, and the hidden workspaces are empty again until each is shown. With
+  `unredir-if-possible = true` that happens for every fullscreen window, not only games:
+  a video, a browser, or an xterm made fullscreen in i3. Set
+  `unredir-if-possible = false`, or keep it and set `unredir = false` in a rule for the
+  windows that should not cause it.
+
 ## Writing a style
 
 A style is a set of picom animations (see picom(1)) whose scripts read the plugin's
@@ -121,6 +153,54 @@ it doesn't spill onto the other monitor, and gives it a short fade when the dire
 zero. picom asks the plugin for the values only when an animation whose script reads one
 starts.
 
+### Drawing hidden windows
+
+`ws-pass` runs on the windows of hidden workspaces too. For those, three rules hold:
+
+- Keep their images: set `keep-image-when-hidden = true` in the rule. picom ignores a
+  start on a window it has no image of.
+- Set `opacity` from `window-mapped-opacity * plugin-ws-direction-placed`. A hidden
+  window has `window-raw-opacity` 0; `window-mapped-opacity` is the opacity it has while
+  shown, and `placed` is 0 for a window whose place is on another monitor.
+- Place the windows by `plugin-ws-direction-face`, with the `plugin-ws-direction-monitor-*`
+  rect, not with `window-monitor-*`: a hidden window can be on the wrong monitor (see
+  `placed`).
+
+### Workspaces a switch passes
+
+On every workspace switch the plugin starts the custom trigger `ws-pass` on all windows of
+the monitor of the switch: those of the old workspace, of the new one, of the workspaces
+the switch passes, which are those of the same monitor that sort between the two, and of
+the monitor's other workspaces. Going from 1 to 4 on a monitor with workspaces 1 to 5,
+those are the windows of 1, 2, 3 and 4, and of 5. The plugin starts them in the picom
+update pass in which it sees the switch, so they all start together. That matters
+because i3 sends the changes of a switch to the X server in more than one batch: picom
+often sees the old workspace hide one pass after the switch. A window that moves to the
+new workspace with the switch (`move container to workspace 4; workspace 4`) stays on
+screen, so it gets no `ws-pass`.
+
+To draw them, follow [Drawing hidden windows](#drawing-hidden-windows), and give the
+windows an animation for `ws-pass`:
+
+    rules = ({
+      match = "!override_redirect && window_type = 'normal'";
+      keep-image-when-hidden = true;
+      animations = ({
+        triggers = ["open", "show", "hide", "ws-pass"];
+        ...
+      });
+    });
+
+The animation gets the variables of the switch. Its `face` is 0 on the old workspace,
+`direction * distance` on the new one, and a value in between on the workspaces passed.
+So one block moves every window of a switch, from face `face` to face
+`face - direction * distance`. Give it `suppressions = ["show", "hide"]`: i3 shows and
+hides the windows of the old and the new workspace while their `ws-pass` already runs,
+and without it they would start over.
+
+picom ignores a start on a window it has no image of yet, and on a window whose rule has
+no `ws-pass` animation. Such a window gets its `show` or `hide` as usual.
+
 ## Reference
 
 ### Variables
@@ -128,7 +208,9 @@ starts.
 `plugin-ws-direction-direction`
 : 1 if the new workspace sorts after the old one, -1 if before, 0 if the animation is
   not part of a workspace switch on the window's monitor (a new window, scratchpad,
-  fullscreen, a window moved to another workspace).
+  fullscreen, a window moved to another workspace). `ws-pass` carries the switch the
+  plugin started it for. A custom trigger the plugin didn't start, such as one started
+  with picom's `StartAnimations` (see picom(1)), is never part of a switch.
 
 `plugin-ws-direction-distance`
 : How many workspaces of the monitor the switch moved: 1 to the next one, 2 when it
@@ -174,6 +256,18 @@ manager lists it in `_NET_CLIENT_LIST`, it is on one desktop (`_NET_WM_DESKTOP`,
 sticky, and not in the scratchpad), and it isn't `_NET_WM_STATE_HIDDEN` (under i3: a tab
 that isn't the selected one, which isn't seen on its workspace).
 
+### Triggers
+
+The plugin declares a custom animation trigger, so a config uses it without listing it in
+`animation-triggers` (listing it too is fine). It starts it on the windows of a
+monitor's workspaces; picom ignores a start on a window whose rule has no animation for
+the trigger, or that it has no image of.
+
+`ws-pass`
+: On every workspace switch, on every window of the monitor of the switch, in the pass in
+  which the plugin sees the switch; not on a window that moved to the new workspace with
+  the switch. See [Workspaces a switch passes](#workspaces-a-switch-passes).
+
 ### Environment
 
 `WS_DIRECTION_LOG`
@@ -211,7 +305,9 @@ The plugin uses only what an EWMH window manager already does. It reads:
   or the plugin could not start: then a line that starts with `ws-direction:` on picom's
   standard error says why, and so does `WS_DIRECTION_LOG` (the plugin doesn't write to
   picom's `--log-file`). `picom's plugin API is not compatible` means it needs another
-  plugin API of the picom fork; others say it could not connect to the X server.
+  plugin API of the picom fork; others say it could not connect to the X server. A
+  style with a `ws-pass` part also logs an error about that part. `picom --diagnostics`
+  lists the plugin's trigger once it loads.
 - **Windows blink when you go back to a workspace while its windows still move away.**
   This happens with picom releases. When a window maps again, picom draws its new pixmap
   from the first damage on. On some drivers (seen on NVIDIA) the X server sends that

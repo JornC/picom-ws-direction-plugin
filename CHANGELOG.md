@@ -4,11 +4,11 @@
 
 The first version. The commits before it had no version.
 
-It needs plugin API 0.2 of the picom fork (CI builds against the fork at `PICOM_REF`).
+It needs plugin API 0.4 of the picom fork (CI builds against the fork at `PICOM_REF`).
 
 Upgrading from the unversioned plugin on `main`:
 
-- picom's `hook-v2` branch, with plugin API 0.2, loads it too, as does the picom fork.
+- picom's `hook-v2` branch, with plugin API 0.2, can't load it. The picom fork can.
 - The variables it had, `direction`, `monitor-x`, `monitor-y`, `monitor-width` and
   `monitor-height`, keep their names and meaning. `distance`, `faces`, `face`,
   `selected` and `placed` are new.
@@ -22,6 +22,14 @@ Variables:
   `plugin-ws-direction-`.
 - `WS_DIRECTION_LOG` logs every decision, in picom's log format. Its first line is the
   plugin's version.
+
+Switch passes:
+
+- On every switch the plugin starts the trigger `ws-pass` on every window of the
+  monitor, in the pass in which it sees the switch, so styles can draw the workspaces in
+  between.
+- A window that moves to the new workspace with the switch gets no `ws-pass`.
+- The plugin declares `ws-pass`, so a config doesn't list it in `animation-triggers`.
 
 Build and tests:
 

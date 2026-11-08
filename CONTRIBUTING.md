@@ -5,7 +5,7 @@ commits. For using it, see the [README](README.md).
 
 ## Building against the picom fork
 
-The plugin needs plugin API 0.2 of the picom fork. No picom release has it yet; it is on
+The plugin needs plugin API 0.4 of the picom fork. No picom release has it yet; it is on
 the `main` branch of the picom fork the plugin is developed with (github.com/JornC/picom),
 which is picom's `next` branch plus one commit per feature. That branch is not published
 yet. CI builds against it at `PICOM_REF` in `.github/workflows/ci.yml`.
@@ -97,10 +97,11 @@ fonts.
 
 ## Code layout
 
-- `src/plugin.c`: the hooks into picom, and the constructor that adds the variables.
+- `src/plugin.c`: the hooks into picom, the frame callback, and the constructor that
+  adds the variables and declares the triggers.
 - `src/desktop.c`: reads the monitors, the workspaces and the managed windows from the
   X server.
-- `src/passes.c`: finds switches, and works out the variables.
+- `src/passes.c`: finds switches, starts `ws-pass`, and works out the variables.
 - `src/ws_direction.h`: the plugin's internal header.
 - `styles/`: the styles.
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Test harness for the ws-direction picom plugin, and so for the picom hook it builds on
-# (animation variables, plugin API 0.2).
+# Test harness for the ws-direction picom plugin, and so for the picom plugin API it builds
+# on (animation variables, frame callbacks, start_animation and add_animation_trigger:
+# plugin API 0.4).
 #
 # Phase 1: a nested Xvfb with two monitors (DPT 3440x1440 at +0+480, HDT 1080x1920 at
 # +3440+0), stock i3, xterms on several workspaces, and picom with the plugin,
@@ -18,8 +19,10 @@
 # Phase 1 also starts a custom animation trigger over picom's D-Bus interface
 # (StartAnimations) on an xterm of a hidden workspace, and checks a screenshot shows it
 # while the animation runs, and that started right after a switch on the xterms of the
-# workspaces in between, it gets the switch.
-# The harness runs on a D-Bus session bus of its own.
+# workspaces in between, it gets the switch. Then it checks that the plugin itself starts
+# the custom trigger ws-pass on the xterms of the workspaces a switch passes, in the pass
+# of the switch, and takes a screenshot halfway through such a switch. The harness runs on
+# a D-Bus session bus of its own.
 #
 # Phase 2: i3 is replaced by fakewm.c, a tiny stand-in window manager. It can spread one
 # workspace switch over several picom frames, and set up cases i3 won't produce on demand
@@ -36,8 +39,8 @@
 # it alone before treating that failure as a bug.
 #
 # Usage: make && tests/run.sh
-# Environment: PICOM (picom binary, default: picom on the PATH; it must have the
-# animation variable hook and custom animation triggers), I3 (default /usr/bin/i3),
+# Environment: PICOM (picom binary, default: picom on the PATH; it must have plugin API
+# 0.4), I3 (default /usr/bin/i3),
 # WSDIR_DISPLAY (default :91), WSDIR_WORK (directory for the i3 socket and logs, default
 # $XDG_RUNTIME_DIR/wsdir-<display number>), WSDIR_SETTLE (seconds to wait after each
 # step, default 0.7), WSDIR_PLUGIN (the plugin, default build/ws-direction.so).
@@ -105,10 +108,12 @@ PLUGIN=$(realpath "$PLUGIN")
 	echo '});'
 } >"$OUT/wsdir-plugin.conf"
 CONFIG=$OUT/wsdir-plugin.conf
+# Phase 1 uses the same. The plugin declares ws-pass, but slide has no animation for it, so
+# picom ignores the plugin's starts, and every show and hide runs as it would without them.
+I3_CONFIG=$CONFIG
 # A custom trigger that draws a window, hidden or not, for 2 s, cropped to the monitor
-# the plugin gives. Normal windows keep their image while hidden. Shows and hides read a
-# variable of the plugin, as a style does, so the plugin sees each workspace switch when
-# it happens.
+# the plugin gives. Normal windows keep their image while hidden. Nothing else reads a
+# variable of the plugin: it sees each workspace switch from its frame callback.
 {
 	echo "plugins = \"$PLUGIN\";"
 	echo 'backend = "glx";'
@@ -128,13 +133,60 @@ rules = ({
     crop-width = "plugin-ws-direction-monitor-width";
     crop-height = "plugin-ws-direction-monitor-height";
     offset-x = { duration = 2; start = 0; end = 0; };
-  }, {
-    triggers = ["show", "hide"];
-    offset-x = { duration = "0.05 + 0 * plugin-ws-direction-direction"; start = 0; end = 0; };
   });
 });
 EOF
 } >"$OUT/wave.conf"
+# One block for every window of a switch, the ones that hide and show and the ones of the
+# workspaces it passes (ws-pass): it moves from face `face` to face
+# `face - direction * distance`, one monitor height per face, cropped to the monitor.
+# Linear and slow, so a screenshot halfway shows the workspace in between. ws-pass
+# suppresses show and hide, so a show or hide that comes later does not restart it.
+PASS_LENGTH=4
+{
+	echo "plugins = \"$PLUGIN\";"
+	echo 'backend = "glx";'
+	echo 'vsync = true;'
+	echo 'use-damage = true;'
+	echo 'unredir-if-possible = false;'
+	cat <<EOF
+rules = ({
+  match = "!override_redirect && window_type = 'normal'";
+  keep-image-when-hidden = true;
+  animations = ({
+    triggers = ["open", "show", "hide"];
+    opacity = "window-mapped-opacity * plugin-ws-direction-placed";
+    offset-y = {
+      duration = $PASS_LENGTH;
+      start = "plugin-ws-direction-face * plugin-ws-direction-monitor-height";
+      end = "(plugin-ws-direction-face - plugin-ws-direction-direction * plugin-ws-direction-distance) * plugin-ws-direction-monitor-height";
+    };
+    crop-x = "plugin-ws-direction-monitor-x";
+    crop-y = "plugin-ws-direction-monitor-y";
+    crop-width = "plugin-ws-direction-monitor-width";
+    crop-height = "plugin-ws-direction-monitor-height";
+  }, {
+    triggers = ["ws-pass"];
+    suppressions = ["show", "hide"];
+    opacity = "window-mapped-opacity * plugin-ws-direction-placed";
+    offset-y = {
+      duration = $PASS_LENGTH;
+      start = "plugin-ws-direction-face * plugin-ws-direction-monitor-height";
+      end = "(plugin-ws-direction-face - plugin-ws-direction-direction * plugin-ws-direction-distance) * plugin-ws-direction-monitor-height";
+    };
+    crop-x = "plugin-ws-direction-monitor-x";
+    crop-y = "plugin-ws-direction-monitor-y";
+    crop-width = "plugin-ws-direction-monitor-width";
+    crop-height = "plugin-ws-direction-monitor-height";
+  });
+});
+EOF
+} >"$OUT/pass.conf"
+# pass_time DISTANCE FRACTION: seconds until FRACTION of a pass.conf switch of DISTANCE
+# workspaces is done.
+pass_time() {
+	awk -v l="$PASS_LENGTH" -v f="$2" 'BEGIN { print l * f }'
+}
 
 # --- process handling: only ever stop PIDs started here ---
 
@@ -335,6 +387,31 @@ variables() {
 	expect "$@"
 }
 
+# pass_case NAME MARK SWITCH WINDOW...: after line MARK, the plugin saw the switch SWITCH
+# (as it logs it, like "1:IDE" -> "4:Misc") on the root window, and started ws-pass on each
+# WINDOW once, all in that same pass. Shows and hides with a direction are reported.
+pass_case() {
+	local name=$1 mark=$2 switch=$3 lines switch_pass want='' got='' title passes others
+	shift 3
+	lines=$(tail -n +"$((mark + 1))" "$LOG")
+	switch_pass=$(grep -F "$switch" <<<"$lines" | grep -m1 "(from the root window, in pass" |
+		sed -nE 's/.*in pass ([0-9]+)\)$/\1/p')
+	for title in "$@"; do
+		passes=$(sed -nE 's/.*\] ws-pass of window 0x[0-9a-f]+ \('"$title"'\): .*, pass ([0-9]+)$/\1/p' <<<"$lines" |
+			tr '\n' ' ')
+		want+=" $switch_pass"
+		got+=" ${passes% }"
+	done
+	others=$(sed -nE 's/.*\] (open|show|hide) of window 0x[0-9a-f]+ \((.*)\): direction = -?1 .*, pass ([0-9]+)$/\2:\3/p' <<<"$lines" |
+		tr '\n' ' ')
+	if [[ -n $switch_pass && $got == "$want" ]]; then
+		pass "$name (pass $switch_pass; shows and hides: $others)"
+	else
+		fail "$name" "switch in pass ${switch_pass:-none}, ws-pass in passes:$got" \
+			"shows and hides: $others"
+	fi
+}
+
 # Time (ms since midnight) of the first log line after line $1 that matches $2.
 log_time_ms() {
 	tail -n +"$(($1 + 1))" "$LOG" | grep -m1 -E "$2" |
@@ -364,7 +441,7 @@ else
 	fail "slide style loads (picom --diagnostics)" "see $OUT/diagnostics.out"
 fi
 if grep -q "plugin API is not compatible" "$OUT/diagnostics.out"; then
-	die "this picom has no animation variable hook (plugin API 0.2), see $OUT/diagnostics.out"
+	die "this picom does not have plugin API 0.4, see $OUT/diagnostics.out"
 fi
 "$PICOM" --config "$OUT/wave.conf" --diagnostics >"$OUT/diagnostics-wave.out" 2>&1
 grep -qx "  - wave" "$OUT/diagnostics-wave.out" ||
@@ -436,7 +513,7 @@ i3cmd 'workspace 1:IDE'
 sleep 0.5
 echo "   desktops: $(xprop -root _NET_DESKTOP_NAMES | cut -d= -f2)"
 
-start_picom "$CONFIG" picom-i3
+start_picom "$I3_CONFIG" picom-i3
 
 # The plugin's first line in WS_DIRECTION_LOG, which is picom's log here, is its version.
 plugin_first=$(grep -m1 " ws_direction DEBUG \] " "$LOG" | sed -E 's/^\[[^]]*\] //')
@@ -592,7 +669,7 @@ done
 stop_picom
 sed -E -e 's/cubic-bezier\([^)]*\)/linear/' -e 's/var-length = [0-9.]+;/var-length = 6;/' \
 	-e 's/\+ [0-9.]+ \* \(1 - var-slide\)/+ 3 * (1 - var-slide)/' \
-	"$CONFIG" >"$OUT/slow.conf"
+	"$I3_CONFIG" >"$OUT/slow.conf"
 start_picom "$OUT/slow.conf" picom-slow
 # A floating window on workspace 3 that hangs off the right edge of HDT, so it is not
 # fully on any monitor. It must still be cropped to HDT when 3 slides left. It sits
@@ -610,6 +687,13 @@ color_share() {
 			END { if (na + nb == 0) print -1; else printf "%d\n", 100 * na / (na + nb) }'
 }
 pixel() { magick "$OUT/shot.png" -crop "1x1+$1+$2" +repage txt:- | awk 'NR == 2 { print $3 }'; }
+# color_part X Y W H COLOR: the share of the pixels in the rectangle that are COLOR, in
+# percent.
+color_part() {
+	magick "$OUT/shot.png" -crop "$3x$4+$1+$2" +repage txt:- |
+		awk -v a="#$5" 'NR > 1 { n++ } $3 == a { na++ }
+			END { if (n == 0) print -1; else printf "%d\n", 100 * na / n }'
+}
 
 # shot_case NAME I3-COMMAND X Y W H COLOR OTHER MIN MAX: switch, take a screenshot after
 # 1.5 s, and check that COLOR's share of the strip is between MIN and MAX percent.
@@ -743,6 +827,127 @@ i3cmd 'workspace 1:IDE'
 sleep "$SETTLE"
 stop_picom
 
+# The plugin starts the custom trigger ws-pass from its frame callback, on all xterms of
+# the switch's monitor, without StartAnimations. Every workspace with an xterm is shown
+# once under this picom, so the xterms have images to keep, and all of them get ws-pass.
+# DPT: 1 is red, 2 is blue, 4 and 7 are white. HDT: 3 is green, 5 is yellow.
+start_picom "$OUT/pass.conf" picom-pass
+for ws in 2:Web 4:Misc 7:Extra 5:Music 3:Term 1:IDE; do
+	i3cmd "workspace $ws"
+	sleep "$SETTLE"
+done
+sleep "$PASS_LENGTH"
+import -window root "$OUT/shot.png"
+before=$(color_part 1000 480 1 1440 0000FF)
+mark=$(log_mark)
+i3cmd 'workspace 4:Misc'
+# Halfway through, 1 has gone up by one monitor height, and 2 is where 1 was.
+sleep "$(awk -v l="$PASS_LENGTH" 'BEGIN { print l / 2 }')"
+import -window root "$OUT/shot.png"
+cp "$OUT/shot.png" "$OUT/shot-pass.png"
+during=$(color_part 1000 480 1 1440 0000FF)
+sleep "$PASS_LENGTH"
+import -window root "$OUT/shot.png"
+after=$(color_part 1000 480 1 1440 0000FF)
+if ((before == 0 && during >= 50 && after == 0)); then
+	pass "screenshot: DPT 1->4 draws 2, which it passes, halfway (#0000FF $before% $during% $after%)"
+else
+	fail "screenshot: DPT 1->4 draws 2, which it passes, halfway" \
+		"#0000FF share of a DPT strip: before $before%, halfway $during% (at least 50), after $after%"
+fi
+GOT=$(variables_since "$mark" ws-pass)
+expect "  (ws-pass on 1 from face 0, on 2 from face 1, on 4 from face 2, and on 7 too)" \
+	"ws1-a ws-pass direction 1 distance 2 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-b ws-pass direction 1 distance 2 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws2-a ws-pass direction 1 distance 2 face 1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a ws-pass direction 1 distance 2 face 2/6 selected 1 placed 1 $DPT_RECT" \
+	"ws7-a ws-pass direction 1 distance 2 face 3/6 selected 1 placed 1 $DPT_RECT"
+starts=$(tail -n +"$((mark + 1))" "$LOG" |
+	sed -nE 's/.*Starting animation ([a-z-]+) for window 0x[0-9a-f]+ \((ws1-a|ws1-b|ws2-a|ws4-a)\)$/\2 \1/p' |
+	sort | tr '\n' ' ')
+if [[ $starts == "ws1-a ws-pass ws1-b ws-pass ws2-a ws-pass ws4-a ws-pass " ]]; then
+	pass "  (picom started ws-pass once on each, and no show or hide)"
+else
+	fail "  (picom started ws-pass once on each, and no show or hide)" "starts: $starts"
+fi
+pass_case "  (all in the pass of the root window change)" "$mark" '"1:IDE" -> "4:Misc"' \
+	ws1-a ws1-b ws2-a ws4-a
+
+# pass_switch NAME I3-COMMAND EXPECTATION...: switch, and check that the xterms of the
+# monitor got ws-pass with these variables, and that none of them started a show or hide.
+pass_switch() {
+	local name=$1 cmd=$2
+	shift 2
+	CASE_MARK=$(log_mark)
+	i3cmd "$cmd"
+	sleep "$SETTLE"
+	GOT=$(variables_since "$CASE_MARK" ws-pass)
+	expect "$name" "$@"
+	GOT=$(directions_since "$CASE_MARK")
+	expect "  (no show or hide)" none
+}
+pass_switch "DPT 4->1" 'workspace 1:IDE' \
+	"ws7-a ws-pass direction -1 distance 2 face 1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a ws-pass direction -1 distance 2 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws2-a ws-pass direction -1 distance 2 face -1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-a ws-pass direction -1 distance 2 face -2/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-b ws-pass direction -1 distance 2 face -2/6 selected 1 placed 1 $DPT_RECT"
+CASE_MARK=$(log_mark)
+i3cmd 'workspace 7:Extra'
+sleep "$SETTLE"
+GOT=$(directions_since "$CASE_MARK")
+expect "DPT 1->7: no show or hide" none
+GOT=$(variables_since "$CASE_MARK" ws-pass)
+expect "  (ws-pass on 1, 2, 4 and 7, faces 0 to 3)" \
+	"ws1-a ws-pass direction 1 distance 3 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-b ws-pass direction 1 distance 3 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws2-a ws-pass direction 1 distance 3 face 1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a ws-pass direction 1 distance 3 face 2/6 selected 1 placed 1 $DPT_RECT" \
+	"ws7-a ws-pass direction 1 distance 3 face 3/6 selected 1 placed 1 $DPT_RECT"
+pass_case "  (all in the pass of the root window change)" "$CASE_MARK" '"1:IDE" -> "7:Extra"' \
+	ws1-a ws1-b ws2-a ws4-a ws7-a
+pass_switch "DPT 7->1" 'workspace 1:IDE' \
+	"ws7-a ws-pass direction -1 distance 3 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a ws-pass direction -1 distance 3 face -1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws2-a ws-pass direction -1 distance 3 face -2/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-a ws-pass direction -1 distance 3 face -3/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-b ws-pass direction -1 distance 3 face -3/6 selected 1 placed 1 $DPT_RECT"
+sleep "$(pass_time 3 1.1)"
+pass_switch "DPT 1->2, which passes nothing: ws-pass on all of DPT's xterms" 'workspace 2:Web' \
+	"ws1-a ws-pass direction 1 distance 1 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-b ws-pass direction 1 distance 1 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws2-a ws-pass direction 1 distance 1 face 1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a ws-pass direction 1 distance 1 face 2/6 selected 1 placed 1 $DPT_RECT" \
+	"ws7-a ws-pass direction 1 distance 1 face 3/6 selected 1 placed 1 $DPT_RECT"
+pass_switch "HDT 3->5 while DPT shows 2: only HDT's xterms" 'workspace 5:Music' \
+	"ws3-a ws-pass direction 1 distance 1 face 0/2 selected 1 placed 1 $HDT_RECT" \
+	"ws5-a ws-pass direction 1 distance 1 face 1/2 selected 1 placed 1 $HDT_RECT"
+# Not at once, so the plugin sees HDT's switch on the root window too (see README,
+# Limits).
+i3cmd 'workspace 3:Term'
+sleep "$SETTLE"
+i3cmd 'workspace 1:IDE'
+sleep "$(pass_time 1 1.1)"
+
+# A window that moves to the new workspace with the switch stays on screen: it gets no
+# ws-pass, and no show or hide either.
+pass_switch "DPT 1->2 with ws1-b moved along: no ws-pass for it" \
+	'[title="^ws1-b$"] move container to workspace 2:Web; workspace 2:Web' \
+	"ws1-a ws-pass direction 1 distance 1 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws2-a ws-pass direction 1 distance 1 face 1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a ws-pass direction 1 distance 1 face 2/6 selected 1 placed 1 $DPT_RECT" \
+	"ws7-a ws-pass direction 1 distance 1 face 3/6 selected 1 placed 1 $DPT_RECT"
+sleep "$(pass_time 1 1.1)"
+pass_switch "DPT 2->1 with ws1-b moved back along" \
+	'[title="^ws1-b$"] move container to workspace 1:IDE; workspace 1:IDE' \
+	"ws2-a ws-pass direction -1 distance 1 face 0/6 selected 1 placed 1 $DPT_RECT" \
+	"ws1-a ws-pass direction -1 distance 1 face -1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws4-a ws-pass direction -1 distance 1 face 1/6 selected 1 placed 1 $DPT_RECT" \
+	"ws7-a ws-pass direction -1 distance 1 face 2/6 selected 1 placed 1 $DPT_RECT"
+sleep "$(pass_time 1 1.1)"
+sleep "$PASS_LENGTH"
+stop_picom
+
 # The plugin is loaded here too. The hook calls a provider only when an
 # animation starts whose script reads its variable, and no script here reads one. So
 # animations must start, and the plugin must never be asked: no decision line anywhere
@@ -775,7 +980,7 @@ stop_picom
 # Without an "open" animation picom doesn't look at the windows already on screen when
 # it starts, so here only the seed (from mapped windows) can know that HDT shows 3.
 # DPT shows 7 and has the focus: 7->5 would be -1, but on HDT it is 3->5, +1.
-sed 's/triggers = \["show", "open"\];/triggers = ["show"];/' "$CONFIG" >"$OUT/no-open.conf"
+sed 's/triggers = \["show", "open"\];/triggers = ["show"];/' "$I3_CONFIG" >"$OUT/no-open.conf"
 i3cmd 'workspace 7:Extra'
 sleep "$SETTLE"
 start_picom "$OUT/no-open.conf" picom-no-open
@@ -872,6 +1077,27 @@ if [[ -z $errors ]]; then
 	pass "no errors in the picom logs (the vsync error is expected in Xvfb)"
 else
 	fail "no errors in the picom logs" "$errors"
+fi
+
+# The plugin declares ws-pass itself, so no config lists it, but slide has no animation for
+# it. The plugin starts it on every switch, picom ignores those starts, and the shows and
+# hides run as usual (checked by the cases of phase 1 and 2).
+tried=$(grep -cE "windows, started ws-pass on [1-9][0-9]* \(in pass" "$OUT/picom-i3.log")
+ignored=$(grep -c "Not starting animation ws-pass .* because it has no animation for it" \
+	"$OUT/picom-i3.log")
+started=$(grep -c "Starting animation ws-pass" "$OUT/picom-i3.log")
+if ((tried > 0 && ignored > 0 && started == 0)); then
+	pass "the plugin declares ws-pass, slide has no animation for it: picom ignores the starts ($tried switches, $ignored windows)"
+else
+	fail "the plugin declares ws-pass, slide has no animation for it: picom ignores the starts" \
+		"$tried switches with starts, $ignored starts ignored, $started ws-pass animations started"
+fi
+tried=$(grep -cE "windows, started ws-pass on [1-9][0-9]* \(in pass" "$OUT/picom-fake.log")
+started=$(grep -c "Starting animation ws-pass" "$OUT/picom-fake.log")
+if ((tried > 0 && started == 0)); then
+	pass "  (the same with fakewm: $tried switches with starts, none animated)"
+else
+	fail "  (the same with fakewm)" "$tried switches with starts, $started ws-pass animations started"
 fi
 
 # Every script in the other configs reads the variables, so picom must have asked

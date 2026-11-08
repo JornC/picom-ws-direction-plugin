@@ -5,7 +5,21 @@
 /// An animation is part of a recent switch on the window's monitor when it is a show or
 /// open of a window of the workspace switched to, a hide of a window of the workspace
 /// switched away from, or any trigger that picom does not fire for a change of the window
-/// itself, such as a custom trigger started with StartAnimations (see picom(1)).
+/// itself, such as ws-pass or a custom trigger started with StartAnimations (see
+/// picom(1)).
+///
+/// On every switch we start the custom trigger ws-pass on all windows of the switch:
+/// those of the workspace switched away from, of the one switched to, and of the
+/// workspaces in between (those of the monitor that sort between the two). We start them
+/// in the pass in which we see the switch, so they all begin together, also when the
+/// window manager hides and shows them over more than one pass. A window that moved to
+/// another workspace together with the switch stays on screen, so it is left out. We
+/// declare ws-pass ourselves (add_animation_trigger), so a config uses it without listing
+/// it in animation-triggers. A config that wants the windows in between drawn keeps their
+/// images (keep-image-when-hidden) and gives them a ws-pass animation that suppresses
+/// show and hide, so a show or hide that comes later does not restart them.
+/// picom ignores the start for a window without a ws-pass animation, and for one it
+/// cannot draw because it has no image yet; such a window gets its show or hide as usual.
 
 #include <stdlib.h>
 #include <string.h>
@@ -89,6 +103,16 @@ struct ws_move {
 	unsigned distance;
 };
 
+/// Whether desktop `desktop` is a workspace that a switch from `from` to `to` on the
+/// monitor with index `index` passes: one of that monitor that sorts between the two.
+static bool ws_passes(struct ws_order from, struct ws_order to, int index, unsigned desktop) {
+	auto low = ws_order_compare(to, from) > 0 ? from : to;
+	auto high = ws_order_compare(to, from) > 0 ? to : from;
+	auto order = ws_order_of(wsd.names[desktop], desktop);
+	return ws_desktop_monitor(desktop) == index && ws_order_compare(order, low) > 0 &&
+	       ws_order_compare(order, high) < 0;
+}
+
 /// The way from workspace `from` to workspace `to` on the monitor with index `index`. The
 /// distance counts the workspaces of the monitor that sort between the two, as they are
 /// now: with i3, an empty workspace that isn't shown doesn't exist, so it doesn't count.
@@ -97,15 +121,9 @@ static struct ws_move ws_steps(struct ws_order from, struct ws_order to, int ind
 	if (ret.direction == 0) {
 		return ret;
 	}
-	auto low = ret.direction > 0 ? from : to;
-	auto high = ret.direction > 0 ? to : from;
 	ret.distance = 1;
 	for (unsigned d = 0; d < wsd.n_names; d++) {
-		auto order = ws_order_of(wsd.names[d], d);
-		if (ws_desktop_monitor(d) == index && ws_order_compare(order, low) > 0 &&
-		    ws_order_compare(order, high) < 0) {
-			ret.distance++;
-		}
+		ret.distance += ws_passes(from, to, index, d);
 	}
 	return ret;
 }
@@ -182,9 +200,9 @@ static void ws_add_switch(struct ws_monitor *m, unsigned k, unsigned desktop, xc
 	ws_source(source, w);
 	auto move = ws_switch_move(m, k);
 	ws_log("Workspace switch on monitor at %d,%d: \"%s\" -> \"%s\", direction %d, "
-	       "distance %u (from %s)",
+	       "distance %u (from %s, in pass %llu)",
 	       m->viewport_x, m->viewport_y, m->visits[k - 1].name, m->visits[k].name,
-	       move.direction, move.distance, source);
+	       move.direction, move.distance, source, (unsigned long long)wsd.frame);
 }
 
 /// Get what we know about the monitor of `desktop`. If we know nothing yet, assume it
@@ -427,15 +445,9 @@ void ws_compute(const struct picom_animation_start *start,
 	bool gone = strcmp(start->trigger, "close") == 0;
 	xcb_window_t client = start->client != XCB_NONE ? start->client : start->window;
 
-	// The root window and the managed windows are read again on the first call in
-	// each frame, and the windows that start in the same frame share that.
-	if (start->frame != wsd.frame) {
-		auto root = ws_read_root_request();
-		auto clients = ws_client_list_request();
-		wsd.frame = start->frame;
-		wsd.frame_time_us = now;
-		ws_refresh(root);
-		ws_read_clients(clients);
+	// The windows that start in the same pass share one read.
+	if (start->frame != wsd.read_frame) {
+		ws_read();
 	}
 
 	auto place = ws_place_of(start, client, gone);
@@ -492,18 +504,66 @@ void ws_compute(const struct picom_animation_start *start,
 		char *name = ws_window_name(client);
 		ws_log("%s of window %#010x (%s): direction = %d (%s), "
 		       "distance %u, face %d of %u, selected %d, placed %d, "
-		       "monitor %d,%d %dx%d, %llu us, %u waits for X",
+		       "monitor %d,%d %dx%d, %llu us, %u waits for X, pass %llu",
 		       start->trigger, start->window, name, move.direction, reason,
 		       move.distance, face, faces, selected, placed, monitor_rect.x1,
 		       monitor_rect.y1, monitor_rect.x2 - monitor_rect.x1,
-		       monitor_rect.y2 - monitor_rect.y1, (unsigned long long)took, waits);
+		       monitor_rect.y2 - monitor_rect.y1, (unsigned long long)took, waits,
+		       (unsigned long long)start->frame);
 		free(name);
 	}
+}
 
-	// Drop the events the server sends to every client (MappingNotify). Nothing reads
-	// them otherwise, and they would pile up in the connection's queue.
-	xcb_generic_event_t *event;
-	while ((event = xcb_poll_for_queued_event(wsd.c)) != NULL) {
-		free(event);
+/// The latest switch on monitor `m`, if it is recent and we didn't start ws-pass for it
+/// yet. Returns `k` for the switch to `m->visits[k]`, or 0.
+unsigned ws_unstarted_switch(const struct ws_monitor *m) {
+	auto k = m->n_visits - 1;
+	if (k == 0 || m->visits[k].passes_started || !ws_switch_is_recent(&m->visits[k])) {
+		return 0;
+	}
+	return k;
+}
+
+/// Whether a window of desktop `desktop` is part of the switch to `m->visits[k]`: it is
+/// on the workspace switched away from, on the one switched to, or on any other workspace
+/// of the monitor.
+static bool ws_in_switch(const struct ws_monitor *m, unsigned k, unsigned desktop) {
+	auto name = wsd.names[desktop];
+	auto index = ws_monitor_index(m->has_viewport, m->viewport_x, m->viewport_y);
+	return strcmp(name, m->visits[k - 1].name) == 0 ||
+	       strcmp(name, m->visits[k].name) == 0 || ws_desktop_monitor(desktop) == index;
+}
+
+/// Start ws-pass on all windows of a switch, once per switch, for the latest switch on
+/// each monitor. The window manager may hide and show the windows of the two workspaces
+/// of the switch over more than one pass; this way they all start together. All windows
+/// of the monitor take part, also those of workspaces the switch doesn't reach: when a
+/// switch comes while the last one still runs, every window of the monitor is then in
+/// the same animation, and a style can carry their positions over. A window that moved
+/// to another workspace together with the switch stays on screen, so it is left out.
+void ws_start_passes(void) {
+	for (unsigned i = 0; i < wsd.n_tracked; i++) {
+		auto m = &wsd.tracked[i];
+		auto k = ws_unstarted_switch(m);
+		if (k == 0) {
+			continue;
+		}
+		m->visits[k].passes_started = true;
+		unsigned members = 0, started = 0;
+		for (unsigned j = 0; j < wsd.n_clients; j++) {
+			auto c = &wsd.clients[j];
+			if (c->desktop < 0 || c->moved ||
+			    !ws_in_switch(m, k, (unsigned)c->desktop)) {
+				continue;
+			}
+			members++;
+			started += wsd.api->start_animation(c->id, WS_PASS_TRIGGER);
+		}
+		if (members > 0) {
+			ws_log("Switch \"%s\" -> \"%s\" has %u windows, "
+			       "started %s on %u (in pass %llu)",
+			       m->visits[k - 1].name, m->visits[k].name, members,
+			       WS_PASS_TRIGGER, started, (unsigned long long)wsd.frame);
+		}
 	}
 }

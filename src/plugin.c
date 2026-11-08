@@ -45,30 +45,20 @@
 /// come from RandR, a window's place from GetGeometry and TranslateCoordinates.
 ///
 /// The order in which a window manager changes these properties and maps and unmaps
-/// windows is not specified, and those changes can reach picom over several frames. So we
-/// don't act on events. We remember, per monitor, the workspaces it showed recently, and
-/// when we last saw a part of each switch between them. On the first call in each frame
-/// we read the root properties again and update that. When a window starts a show, open
+/// windows is not specified, and those changes can reach picom over several frames. So
+/// the variables don't depend on that order. We remember, per monitor, the workspaces it
+/// showed recently, and when we last saw a part of each switch between them. picom calls
+/// us at the start of every pass (a frame callback). When the root window's workspace
+/// properties changed, we read them again there. The first animation start in a pass
+/// reads them too, unless the frame callback just did. When a window starts a show, open
 /// or hide animation, we look for a recent switch to (or away from) its workspace on its
 /// monitor. A window that shows on a workspace we didn't think was visible also counts as
 /// a switch, because some window managers map the new windows before they update the root
-/// properties.
+/// properties. We start ws-pass for such a switch in the next pass.
 ///
-/// We only learn about a switch when picom asks for a value, i.e. when a window starts
-/// an animation whose script reads the variables. A switch that starts no animation (for
-/// example one made while picom is unredirected, see unredir-if-possible) may not be
-/// seen: we see it only if a window of the new workspace still starts an animation once
-/// picom redirects the screen again. Otherwise the next switch is judged against the
-/// last workspace we saw: back to that workspace gives 0; elsewhere the windows that
-/// show get the sign relative to it, and the windows that hide get 0.
+/// picom runs passes also while it doesn't composite (see unredir-if-possible), so we see
+/// those switches too, but picom doesn't draw their animations.
 ///
-/// The first animation start in a frame costs two round trips to the X server, on picom's
-/// main thread: one for the root window and the list of managed windows, one for the
-/// desktop, state and place of each managed window. Later starts in the same frame cost
-/// none, except for a window the window manager doesn't manage: one more for its place.
-/// Usually a round trip is well under a millisecond, but the reply waits behind whatever
-/// the server is doing (other clients, the window manager's own burst of requests during
-/// a switch, picom's drawing of the previous frame), so it can take tens of milliseconds.
 ///
 /// We connect to the display named by DISPLAY, like picom itself. The variables are only
 /// added once the X connection is up. Without it, every animation whose script reads
@@ -105,7 +95,7 @@ static const char *const ws_variable_names[] = {
 static_assert(sizeof(ws_variable_names) / sizeof(ws_variable_names[0]) == WS_N_VARIABLES,
               "every variable needs a name");
 
-struct ws_state wsd = {.current = -1, .frame = UINT64_MAX};
+struct ws_state wsd = {.current = -1, .frame = UINT64_MAX, .read_frame = UINT64_MAX};
 
 __attribute__((format(printf, 1, 2))) void ws_log(const char *fmt, ...) {
 	if (wsd.log == NULL) {
@@ -157,13 +147,47 @@ static double ws_provide(const struct picom_animation_start *start, void *user_d
 	return last.values[(uintptr_t)user_data];
 }
 
+/// picom calls this at the start of every pass, before it starts animations. When the
+/// root window's workspace properties changed, read them again, and start ws-pass for a
+/// new switch.
+static void ws_frame(uint64_t frame, [[maybe_unused]] void *user_data) {
+	wsd.frame = frame;
+	wsd.frame_time_us = ws_now_us();
+
+	// Take all events, so they don't pile up in the connection's queue. Only the root
+	// window's property changes are selected; the server also sends every client a
+	// few, like MappingNotify.
+	bool root_changed = false;
+	xcb_generic_event_t *event;
+	while ((event = xcb_poll_for_event(wsd.c)) != NULL) {
+		if ((event->response_type & 0x7f) == XCB_PROPERTY_NOTIFY) {
+			auto e = (xcb_property_notify_event_t *)event;
+			root_changed |= e->atom == wsd.a_current_desktop ||
+			                e->atom == wsd.a_desktop_names ||
+			                e->atom == wsd.a_desktop_viewport;
+		}
+		free(event);
+	}
+
+	// A provider can record a switch too, after the callback of its pass. Its windows
+	// are started in the next pass.
+	bool unstarted = false;
+	for (unsigned i = 0; i < wsd.n_tracked; i++) {
+		unstarted |= ws_unstarted_switch(&wsd.tracked[i]) > 0;
+	}
+	if (root_changed || unstarted) {
+		ws_read();
+		ws_start_passes();
+	}
+}
+
 __attribute__((constructor)) static void ws_init(void) {
 	auto log_path = getenv("WS_DIRECTION_LOG");
 	if (log_path != NULL && *log_path) {
 		wsd.log = fopen(log_path, "a");
 	}
 	ws_log("ws-direction %s", WS_DIRECTION_VERSION);
-	auto api = picom_api_get_interfaces(0, WS_API_MINOR, "ws-direction");
+	auto api = wsd.api = picom_api_get_interfaces(0, WS_API_MINOR, "ws-direction");
 	if (api == NULL) {
 		ws_fail("picom's plugin API is not compatible: ws-direction needs plugin "
 		        "API " WS_API_VERSION " of the picom fork");
@@ -200,6 +224,10 @@ __attribute__((constructor)) static void ws_init(void) {
 	wsd.a_wm_state = ws_atom("_NET_WM_STATE");
 	wsd.a_wm_state_hidden = ws_atom("_NET_WM_STATE_HIDDEN");
 
+	// Selected before the first read, so no change after it is missed.
+	xcb_change_window_attributes(wsd.c, wsd.root, XCB_CW_EVENT_MASK,
+	                             (uint32_t[]){XCB_EVENT_MASK_PROPERTY_CHANGE});
+
 	// Learn what each monitor shows now, before the first switch.
 	wsd.frame_time_us = ws_now_us();
 	ws_read_root();
@@ -209,7 +237,18 @@ __attribute__((constructor)) static void ws_init(void) {
 	}
 
 	// Only now: a variable must never exist without the connection that gives it a
-	// value.
+	// value, nor without the frame callback that tells it the pass.
+	if (!api->add_frame_callback(ws_frame, NULL)) {
+		ws_fail("could not add the frame callback, "
+		        "not adding the plugin-ws-direction-* variables");
+		return;
+	}
+	// So the user's config can use it without listing it in animation-triggers. Like
+	// the variables, only once the frame callback, which starts it, is there.
+	if (!api->add_animation_trigger(WS_PASS_TRIGGER)) {
+		ws_fail("could not declare the trigger %s", WS_PASS_TRIGGER);
+		return;
+	}
 	for (uintptr_t i = 0; i < WS_N_VARIABLES; i++) {
 		if (!api->add_animation_variable("plugin-ws-direction", ws_variable_names[i],
 		                                 ws_provide, (void *)i)) {

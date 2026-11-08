@@ -3,8 +3,8 @@
 
 /// The plugin's internal header: the types, the state and the functions that more than
 /// one of its modules uses. desktop.c reads the monitors, the workspaces and the managed
-/// windows from the X server. passes.c finds switches and works out the variables.
-/// plugin.c hooks them up to picom.
+/// windows from the X server. passes.c finds switches, starts ws-pass and works out the
+/// variables. plugin.c hooks them up to picom and calls them in every pass.
 
 #pragma once
 
@@ -18,7 +18,7 @@
 #include <xcb/xcb.h>
 
 /// The plugin API the plugin needs is 0.WS_API_MINOR, as the picom fork numbers it.
-#define WS_API_MINOR 2
+#define WS_API_MINOR 4
 #define WS_STR(x) #x
 #define WS_XSTR(x) WS_STR(x)
 #define WS_API_VERSION "0." WS_XSTR(WS_API_MINOR)
@@ -30,6 +30,9 @@ static_assert(false, "picom/api.h is not compatible: ws-direction needs plugin "
                      "picom source tree, run make "
                      "PICOM_API_CFLAGS=-I/path/to/picom/include");
 #endif
+
+/// The custom trigger we start on the windows of the workspaces a switch passes.
+#define WS_PASS_TRIGGER "ws-pass"
 
 /// The animation variables, plugin-ws-direction-<name>, with names in ws_variable_names.
 enum ws_variable {
@@ -73,6 +76,8 @@ struct ws_visit {
 	/// Whether the root window told us about this switch, rather than a window that
 	/// showed.
 	bool from_root;
+	/// Whether we started ws-pass for this switch.
+	bool passes_started;
 };
 
 /// What we know about one monitor.
@@ -98,6 +103,10 @@ struct ws_client {
 	int64_t desktop;
 	/// Where it is, in root coordinates.
 	struct ws_rect rect;
+	/// The name of its workspace, NULL if it is not on one.
+	char *workspace;
+	/// Whether it moved from another workspace since the read before.
+	bool moved;
 };
 
 /// The requests for the root window properties, the screen size and the monitors, sent
@@ -111,6 +120,7 @@ struct ws_root_requests {
 
 /// Everything the plugin knows, defined in plugin.c.
 struct ws_state {
+	const struct picom_api *api;
 	xcb_connection_t *c;
 	xcb_window_t root;
 	xcb_atom_t a_current_desktop, a_desktop_names, a_desktop_viewport, a_wm_desktop,
@@ -118,10 +128,11 @@ struct ws_state {
 	struct ws_rect screen;
 	FILE *log;
 
-	/// The frame of the last call (UINT64_MAX before the first one), and when we saw
-	/// it start.
+	/// The pass picom is in (UINT64_MAX before the first one), and when it started.
 	uint64_t frame;
 	uint64_t frame_time_us;
+	/// The pass in which we last read the root window and the managed windows.
+	uint64_t read_frame;
 	/// How often we waited for the X server while working out the variables of one
 	/// window. For the log.
 	unsigned n_waits;
@@ -139,8 +150,8 @@ struct ws_state {
 	struct ws_rect monitors[WS_MAX_MONITORS];
 	int n_monitors;
 
-	/// The windows in _NET_CLIENT_LIST, read again on the first call in each frame.
-	/// Windows whose place could not be read are left out.
+	/// The windows in _NET_CLIENT_LIST. Windows whose place could not be read are
+	/// left out.
 	struct ws_client *clients;
 	unsigned n_clients;
 
@@ -173,15 +184,16 @@ bool ws_desktop_viewport(unsigned desktop, int32_t *x, int32_t *y);
 int ws_monitor_index(bool has_viewport, int32_t x, int32_t y);
 int ws_desktop_monitor(unsigned desktop);
 bool ws_rect_has_point(struct ws_rect r, int32_t x, int32_t y);
-xcb_get_property_cookie_t ws_client_list_request(void);
-void ws_read_clients(xcb_get_property_cookie_t list_request);
 const struct ws_client *ws_find_client(xcb_window_t id);
-struct ws_root_requests ws_read_root_request(void);
 bool ws_read_root_reply(struct ws_root_requests requests);
 bool ws_read_root(void);
 void ws_seed_from_windows(void);
+void ws_read(void);
 
 // passes.c
 struct ws_monitor *ws_get_monitor(unsigned desktop, xcb_window_t w);
+void ws_refresh(struct ws_root_requests requests);
 void ws_compute(const struct picom_animation_start *start,
                 double values[static WS_N_VARIABLES]);
+unsigned ws_unstarted_switch(const struct ws_monitor *m);
+void ws_start_passes(void);
