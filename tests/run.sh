@@ -31,18 +31,24 @@
 # pass of the switch, and that none of them starts a show or hide on top. Screenshots
 # partway through switches show the xterms of the workspaces passed on the monitor, in
 # order, but not an xterm whose place is still on the other monitor (placed 0), and that a
-# switch made while one runs carries the workspaces on as one strip. With styles/cube.conf
-# and styles/flip.conf, slowed down, a screenshot partway through a switch shows the
+# switch made while one runs carries the workspaces on as one strip. With styles/wall.conf
+# next to pass-slide, "ws-direction overview" opens and closes the overview, a switch
+# while it is open moves the bright tile, and a click on a window picks it ("open --wait"
+# returns 0), while a click on no window does nothing ("open --wait" returns 1 on close).
+# Two toggles at once are both done, --output and --all open the monitors they name, and
+# "open --wait --buttons" returns for the other buttons. With styles/cube.conf and
+# styles/flip.conf, slowed down, a screenshot partway through a switch shows the
 # workspaces in perspective, on their monitor, and not the back of the flip's card, and
 # check-frames.py checks every frame of those switches in picom's frame timing log. Then
 # every style runs as it ships, at its own length, through switches that interrupt each
-# other the same way and the other way, on both monitors, and check-frames.py checks every
-# frame. Last it restarts i3 and changes picom's config, which leave picom without images
-# of the hidden workspaces, and checks that the plugin gets them back by itself, with the
-# screen, the keyboard and the pointer frozen, that it puts the pointer back, and that it
-# waits for a window that paints itself late (tests/slowpaint.c). And that "ws-direction
-# warm" gets them back when asked, also at picom's start, and "warm --auto off" stops the
-# plugin from doing it by itself.
+# other the same way and the other way, on both monitors (and with wall the overview
+# opened halfway into a switch), and check-frames.py checks every frame. Last it restarts
+# i3 and changes picom's config, which leave picom without images of the hidden
+# workspaces, and checks that the plugin gets them back by itself, with the screen, the
+# keyboard and the pointer frozen, that it puts the pointer back, and that it waits for a
+# window that paints itself late (tests/slowpaint.c). And that "ws-direction warm" gets
+# them back when asked, also at picom's start, and "warm --auto off" stops the plugin from
+# doing it by itself.
 # The harness runs on a D-Bus session bus of its own.
 #
 # Phase 2: i3 is replaced by fakewm.c, a tiny stand-in window manager. It can spread one
@@ -1345,6 +1351,308 @@ i3_case "seed: first switch is HDT 3->5 while DPT shows 7, no open animations" \
 	'workspace 5:Music' "ws3-a hide 1"
 stop_picom
 
+# styles/wall.conf next to pass-slide. "ws-direction overview open" unfolds the focused
+# monitor into an overview of its workspaces, "close" folds it, "toggle" toggles it. No
+# animation-triggers line: the plugin declares ws-pass, ws-unfold and ws-fold. DPT is
+# landscape, so its workspaces lie in a column (the strip runs along the short side). The
+# shown workspace is bright, the others are at 70% opacity.
+{
+	echo "plugins = \"$PLUGIN\";"
+	echo 'backend = "glx";'
+	echo 'vsync = true;'
+	echo 'use-damage = true;'
+	echo 'unredir-if-possible = false;'
+	echo 'rules = ({'
+	echo "  match = \"!override_redirect && window_type = 'normal'\";"
+	cat "$PASS_STYLE"
+	echo '}, {'
+	echo "  match = \"!override_redirect && window_type = 'normal'\";"
+	cat "$ROOT/styles/wall.conf"
+	echo '});'
+} >"$OUT/wall.conf"
+unfold() { "$ROOT/build/ws-direction" overview "$1" || die "ws-direction overview $1 failed"; }
+# tile_y FACES INDEX: the y of the middle of DPT's tile INDEX when unfolded.
+tile_y() {
+	awk -v n="$1" -v i="$2" 'BEGIN { k = 0.92 / (n * 1.05 - 0.05);
+		printf "%d\n", 1200 + k * (i - (n - 1) / 2) * 1440 * 1.05 }'
+}
+# is_color COLOR COLORS: COLOR is one of the space-separated COLORS.
+is_color() { [[ " $2 " == *" $1 "* ]]; }
+# wall_case NAME MARK COLORS0 COLORS1: tiles 0 (1:IDE, red) and 1 (2:Web, blue) of DPT
+# have one of COLORS0 and one of COLORS1 (one bright, one dim), and HDT is untouched.
+wall_case() {
+	local faces y0 y1 c0 c1 hdt
+	faces=$(tail -n +"$(($2 + 1))" "$LOG" | grep -m1 -oE 'ws-unfold of window .* face -?[0-9]+ of [0-9]+' |
+		sed -E 's/.* of ([0-9]+)$/\1/')
+	y0=$(tile_y "${faces:-1}" 0)
+	y1=$(tile_y "${faces:-1}" 1)
+	import -window root "$OUT/shot.png"
+	cp "$OUT/shot.png" "$OUT/shot-wall-$SHOTS.png"
+	SHOTS=$((SHOTS + 1))
+	c0=$(pixel 1600 "$y0")
+	c1=$(pixel 1600 "$y1")
+	hdt=$(pixel 3900 900)
+	if [[ -n $faces ]] && is_color "$c0" "$3" && is_color "$c1" "$4" && [[ $hdt == "#00FF00" ]]; then
+		pass "$1 ($faces faces; tile 0 $c0, tile 1 $c1)"
+	else
+		fail "$1" "$faces faces; tile 0 at y $y0: $c0, tile 1 at y $y1: $c1, HDT $hdt"
+	fi
+}
+start_picom "$OUT/wall.conf" picom-wall
+# Every workspace with an xterm shows once under this picom, so picom keeps their images.
+for ws in 2:Web 4:Misc 7:Extra 5:Music 3:Term 1:IDE; do
+	i3cmd "workspace $ws"
+	sleep "$SETTLE"
+done
+sleep "$(pass_time 3 1.1)"
+mark=$(log_mark)
+unfold open
+sleep 1
+wall_case "wall: DPT unfolds, 1:IDE bright, 2:Web dimmed, HDT untouched" "$mark" \
+	"#FF0000 #FF0000" "#0000B3 #0000B2"
+started=$(tail -n +"$((mark + 1))" "$LOG" | grep -oE 'started ws-unfold on [0-9]+ of [0-9]+ windows' | head -1)
+# Notes and Alpha were never shown under this picom, so picom has no image of their
+# xterms and doesn't start the animation for them.
+held=$(tail -n +"$((mark + 1))" "$LOG" | grep -c "ended, holding its pose")
+unseen=$(tail -n +"$((mark + 1))" "$LOG" | grep -c "Not starting animation ws-unfold .* will not be rendered")
+if [[ $started =~ on\ ([0-9]+)\ of\ ([0-9]+) ]] && ((BASH_REMATCH[1] > 0)) &&
+	((held + unseen >= BASH_REMATCH[1] && unseen <= 2)); then
+	pass "  ($started, $held hold their pose, $unseen have no image)"
+else
+	fail "  (the plugin starts ws-unfold on DPT's windows, and they hold)" \
+		"start line: ${started:-none}, $held holding, $unseen without an image"
+fi
+# A window that opens on the unfolded monitor: the plugin starts ws-unfold again on all
+# of DPT's windows, the new one too, and again when it closes.
+case_mark=$(log_mark)
+start_xterm newwin refresh-a
+REFRESH_PID=$LAST_PID
+sleep 1
+refreshed=$(tail -n +"$((case_mark + 1))" "$LOG" | grep -c 'Unfold: the workspaces or windows of an unfolded monitor changed')
+new_tile=$(tail -n +"$((case_mark + 1))" "$LOG" | grep -cE 'ws-unfold of window 0x[0-9a-f]+ \(refresh-a\): .*, unfolded 1,')
+case_mark=$(log_mark)
+stop "$REFRESH_PID"
+sleep 1
+closed=$(tail -n +"$((case_mark + 1))" "$LOG" | grep -c 'Unfold: the workspaces or windows of an unfolded monitor changed')
+if ((refreshed >= 1 && new_tile >= 1 && closed >= 1)); then
+	pass "  (a window that opens or closes on DPT while it is unfolded starts ws-unfold again)"
+else
+	fail "  (a window that opens or closes on DPT while it is unfolded starts ws-unfold again)" \
+		"refreshes on open: $refreshed, ws-unfold of the new window: $new_tile, refreshes on close: $closed"
+fi
+# While DPT is unfolded the plugin takes only DPT's clicks: a click on HDT's xterm
+# focuses it, and DPT stays open.
+focused_output() {
+	i3-msg -s "$SOCK" -t get_workspaces | jq -r '.[] | select(.focused) | .output'
+}
+case_mark=$(log_mark)
+xdotool mousemove 3900 900 click 1
+sleep 0.3
+if [[ $(focused_output) == HDT ]] && ! tail -n +"$((case_mark + 1))" "$LOG" | grep -qE 'started ws-fold|Unfold: the click'; then
+	pass "  (a click on HDT while DPT is unfolded focuses HDT's xterm, and DPT stays open)"
+else
+	fail "  (a click on HDT while DPT is unfolded focuses HDT's xterm, and DPT stays open)" \
+		"the focus is on $(focused_output); see $LOG"
+fi
+if tail -n +"$((mark + 1))" "$LOG" |
+	grep -qE 'ws-unfold of window 0x[0-9a-f]+ \(ws2-a\): .*, index 1, shown 0, unfolded 1,'; then
+	pass "  (ws2-a: index 1, DPT shows index 0, unfolded)"
+else
+	fail "  (ws2-a: index 1, DPT shows index 0, unfolded)" "see $LOG"
+fi
+mark=$(log_mark)
+i3cmd 'workspace 2:Web'
+sleep 1
+wall_case "wall: switching while unfolded moves the bright tile to 2:Web" "$mark" \
+	"#B30000 #B20000" "#0000FF #0000FF"
+others=$(tail -n +"$((mark + 1))" "$LOG" | grep -cE "Starting animation (show|hide) for window")
+if ((others == 0)) && tail -n +"$((mark + 1))" "$LOG" | grep -q 'started ws-unfold on'; then
+	pass "  (the switch starts ws-unfold again, and no show or hide)"
+else
+	fail "  (the switch starts ws-unfold again, and no show or hide)" \
+		"$others shows or hides; see $LOG"
+fi
+mark=$(log_mark)
+unfold close
+sleep 1
+import -window root "$OUT/shot.png"
+folded=$(pixel 1000 1200)
+if [[ $folded == "#0000FF" ]] && tail -n +"$((mark + 1))" "$LOG" | grep -q 'started ws-fold on'; then
+	pass "wall: folding shows 2:Web full size again"
+else
+	fail "wall: folding shows 2:Web full size again" "pixel $folded"
+fi
+xdotool mousemove 3900 900 click 1
+sleep 0.3
+if [[ $(focused_output) == HDT ]]; then
+	pass "  (after folding, a click focuses HDT's xterm again)"
+else
+	fail "  (after folding, a click focuses HDT's xterm again)" "focus on $(focused_output)"
+fi
+# Back over DPT: i3 focuses the monitor under the pointer when it restarts (below).
+xdotool mousemove 2260 960
+i3cmd 'focus output DPT'
+sleep "$SETTLE"
+mark=$(log_mark)
+unfold toggle
+sleep 1
+wall_case "wall: toggle opens it" "$mark" "#B30000 #B20000" "#0000FF #0000FF"
+unfold toggle
+sleep 1
+import -window root "$OUT/shot.png"
+folded=$(pixel 1000 1200)
+if [[ $folded == "#0000FF" ]]; then
+	pass "wall: toggle again closes it"
+else
+	fail "wall: toggle again closes it" "pixel $folded"
+fi
+# Each command is an event of its own: two toggles at the same moment are both done.
+mark=$(log_mark)
+"$ROOT/build/ws-direction" overview toggle &
+t1=$!
+"$ROOT/build/ws-direction" overview toggle &
+t2=$!
+wait "$t1" "$t2"
+sleep 1
+toggles=$(tail -n +"$((mark + 1))" "$LOG" | grep -c 'Unfold: command 3')
+opened=$(tail -n +"$((mark + 1))" "$LOG" | grep -c 'Monitor at 0,480: started ws-unfold')
+folds=$(tail -n +"$((mark + 1))" "$LOG" | grep -c 'Monitor at 0,480: started ws-fold')
+if ((toggles == 2 && opened == 1 && folds == 1)); then
+	pass "wall: two toggles at once are both done, in order"
+else
+	fail "wall: two toggles at once are both done, in order" \
+		"$toggles toggle commands, $opened unfolds, $folds folds (2, 1, 1)"
+fi
+# open --output opens the monitor of that name, --all every monitor.
+mark=$(log_mark)
+"$ROOT/build/ws-direction" overview open --output HDT
+output_status=$?
+sleep 1
+hdt_only=$(tail -n +"$((mark + 1))" "$LOG" | grep -cE 'Monitor at (0,480|3440,0): started ws-unfold')
+hdt=$(tail -n +"$((mark + 1))" "$LOG" | grep -c 'Monitor at 3440,0: started ws-unfold')
+unfold close
+sleep 1
+mark=$(log_mark)
+"$ROOT/build/ws-direction" overview open --all
+all_status=$?
+sleep 1
+both=$(tail -n +"$((mark + 1))" "$LOG" | grep -cE 'Monitor at (0,480|3440,0): started ws-unfold')
+unfold close
+sleep 1
+nope=$("$ROOT/build/ws-direction" overview open --output NOPE 2>&1)
+nope_status=$?
+if ((output_status == 0 && hdt == 1 && hdt_only == 1 && all_status == 0 && both == 2 &&
+	nope_status == 1)) && [[ $nope == *"no monitor with that name"* ]]; then
+	pass "wall: open --output HDT opens HDT, --all both, --output NOPE fails and says why"
+else
+	fail "wall: open --output HDT opens HDT, --all both, --output NOPE fails and says why" \
+		"--output HDT: status $output_status, $hdt_only unfolds, $hdt on HDT" \
+		"--all: status $all_status, $both unfolds" "--output NOPE: status $nope_status, $nope"
+fi
+# With --wait --buttons, another button returns 10 plus its number, and the overview
+# stays open: the right button 13, the wheel down 15.
+mark=$(log_mark)
+"$ROOT/build/ws-direction" overview open --wait --buttons &
+waiter=$!
+sleep 1
+xdotool mousemove 100 1200 click 3
+wait "$waiter"
+right=$?
+"$ROOT/build/ws-direction" overview open --wait --buttons &
+waiter=$!
+sleep 0.5
+xdotool mousemove 100 1200 click 5
+wait "$waiter"
+wheel=$?
+folds=$(tail -n +"$((mark + 1))" "$LOG" | grep -c 'started ws-fold')
+unfold close
+sleep 1
+if ((right == 13 && wheel == 15 && folds == 0)); then
+	pass "wall: open --wait --buttons returns 13 for the right button and 15 for the wheel down, and the overview stays"
+else
+	fail "wall: open --wait --buttons returns 13 for the right button and 15 for the wheel down, and the overview stays" \
+		"right button: $right, wheel down: $wheel, folds meanwhile: $folds"
+fi
+# A click on a window in the overview picks it: i3 shows its workspace and focuses it,
+# the overview closes, and "open --wait" returns 0. A click on no window does nothing,
+# and "open --wait" returns 1 when close closes the overview.
+focused_ws() { i3-msg -s "$SOCK" -t get_workspaces | jq -r '.[] | select(.focused) | .name'; }
+# wait_for_exit PID SECONDS: the exit status of PID, or 124 if it still runs by then.
+wait_for_exit() {
+	local i
+	for ((i = 0; i < $2 * 10; i++)); do
+		if ! kill -0 "$1" 2>/dev/null; then
+			wait "$1"
+			return
+		fi
+		sleep 0.1
+	done
+	kill "$1"
+	wait "$1" 2>/dev/null
+	return 124
+}
+mark=$(log_mark)
+"$ROOT/build/ws-direction" overview open --wait &
+waiter=$!
+sleep 1
+faces=$(tail -n +"$((mark + 1))" "$LOG" | grep -m1 -oE 'ws-unfold of window .* face -?[0-9]+ of [0-9]+' |
+	sed -E 's/.* of ([0-9]+)$/\1/')
+# Left of the column of tiles there is only the wallpaper.
+xdotool mousemove 100 1200 click 1
+sleep 0.5
+if tail -n +"$((mark + 1))" "$LOG" | grep -q 'Unfold: the click at 100,1200 is on no window' &&
+	kill -0 "$waiter" 2>/dev/null; then
+	pass "wall: a click on no window leaves the overview open"
+else
+	fail "wall: a click on no window leaves the overview open" "see $LOG"
+fi
+xdotool mousemove 1600 "$(tile_y "${faces:-1}" 0)" click 1
+wait_for_exit "$waiter" 3
+status=$?
+sleep 1
+import -window root "$OUT/shot.png"
+folded=$(pixel 1000 1200)
+if ((status == 0)) && [[ $(focused_ws) == 1:IDE && $folded == "#FF0000" ]] &&
+	tail -n +"$((mark + 1))" "$LOG" | grep -q 'started ws-fold on'; then
+	pass "wall: a click on 1:IDE's tile shows 1:IDE full size, and open --wait returns 0"
+else
+	fail "wall: a click on 1:IDE's tile shows 1:IDE full size, and open --wait returns 0" \
+		"open --wait returned $status, focus on $(focused_ws), pixel $folded"
+fi
+# 1:IDE shows now: a click on its own tile folds at once, without a switch.
+mark=$(log_mark)
+"$ROOT/build/ws-direction" overview open --wait &
+waiter=$!
+sleep 1
+xdotool mousemove 1600 "$(tile_y "${faces:-1}" 0)" click 1
+wait_for_exit "$waiter" 3
+status=$?
+sleep 1
+import -window root "$OUT/shot.png"
+folded=$(pixel 1000 1200)
+if ((status == 0)) && [[ $(focused_ws) == 1:IDE && $folded == "#FF0000" ]] &&
+	tail -n +"$((mark + 1))" "$LOG" | grep -q 'Monitor at .*: started ws-fold on' &&
+	! tail -n +"$((mark + 1))" "$LOG" | grep -q 'Switch .* started ws-fold'; then
+	pass "wall: a click on the shown workspace's tile folds at once, and open --wait returns 0"
+else
+	fail "wall: a click on the shown workspace's tile folds at once, and open --wait returns 0" \
+		"open --wait returned $status, focus on $(focused_ws), pixel $folded; see $LOG"
+fi
+"$ROOT/build/ws-direction" overview open --wait &
+waiter=$!
+sleep 1
+unfold close
+wait_for_exit "$waiter" 3
+status=$?
+if ((status == 1)); then
+	pass "wall: open --wait returns 1 when close closes the overview"
+else
+	fail "wall: open --wait returns 1 when close closes the overview" "it returned $status"
+fi
+i3cmd 'workspace 1:IDE'
+sleep "$(pass_time 1 1.1)"
+stop_picom
+
 # styles/cube.conf and styles/flip.conf put the workspaces on the sides of a box, or of a
 # card, and turn it in perspective. DPT is landscape, so they turn up and down: in 1->2,
 # 1 (red) turns up and away, and 2 (blue) comes up from below. A side's edge that is
@@ -1419,9 +1727,10 @@ turn_case "screenshot: flip, DPT 1->2 a quarter in: the card tips over, its back
 
 # Every style as it ships, at its own length, through switches that interrupt each other
 # at 0.3 and 0.7 of a switch, the same way and the other way, on DPT and on HDT, which
-# turns sideways. check-frames.py checks every frame, with --seams for the styles whose
-# workspaces tile the monitor.
-declare -A OVERVIEW_OF=()
+# turns sideways; with an overview style next to its switch style (wall to pass-zoom-pan),
+# the overview also opens halfway into a switch. check-frames.py checks every frame, with
+# --seams for the styles whose workspaces tile the monitor.
+declare -A OVERVIEW_OF=([pass-zoom-pan]=wall)
 # style_length STYLE: the style's var-length, in seconds.
 style_length() { sed -nE 's/.*var-length = ([0-9.]+);.*/\1/p' "$ROOT/styles/$1.conf" | head -n 1; }
 style_frames() {

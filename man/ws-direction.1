@@ -210,26 +210,28 @@ there wins over both.
 The plugin needs plugin API 0.9 of the picom fork.
 Load it in
 .I picom.conf
-and include a style for workspace switches:
+and include a style for workspace switches, and an overview style in a second rule with
+the same match:
 .PP
 .RS 4
 .nf
 plugins = "ws\-direction.so";
 rules = ({
   match = "!override_redirect && window_type = \(aqnormal\(aq";
-  @include "ws\-direction/slide.conf"
+  @include "ws\-direction/pass\-zoom\-pan.conf"
+}, {
+  match = "!override_redirect && window_type = \(aqnormal\(aq";
+  @include "ws\-direction/wall.conf"
 });
 .fi
 .RE
 .PP
-The overview needs a style with animations for
-.B ws\-unfold
-and
-.BR ws\-fold ,
-in a second rule with the same match.
-It draws hidden workspaces from the images picom keeps of them; add
-.B keep\-image\-when\-hidden = true;
-to that rule.
+.I wall.conf
+zooms out along the strip of workspaces of
+.IR pass\-zoom\-pan.conf .
+It draws hidden workspaces from the images picom keeps of them, which it asks for
+itself
+.RB ( keep\-image\-when\-hidden ).
 A workspace picom has not shown since it started has no images, and shows no windows.
 The plugin declares its triggers
 .BR ws\-pass ,

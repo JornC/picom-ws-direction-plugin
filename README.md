@@ -7,8 +7,8 @@ tells them where a window's workspace is among the monitor's workspaces, for eff
 that draw the workspaces a switch passes, like a box of workspaces that turns. picom
 itself knows nothing about workspaces: the plugin reads the window manager's EWMH
 properties and hands the scripts sixteen numbers. What the scripts do with them is up
-to you; `styles/` has twelve switch styles to start from, and the `ws-direction`
-command opens and closes the overview.
+to you; `styles/` has twelve switch styles and an overview to start from, and the
+`ws-direction` command opens and closes the overview.
 
 ![Slide: workspace switches under i3 on two monitors, vertical on the landscape one,
 horizontal on the portrait one](docs/slide.gif)
@@ -93,6 +93,23 @@ In `picom.conf`, load the plugin and include a style in a rule:
       @include "ws-direction/slide.conf"
     });
 
+For the overview, add an overview style in a second rule with the same match:
+
+    rules = ({
+      match = "!override_redirect && window_type = 'normal'";
+      @include "ws-direction/pass-zoom-pan.conf"
+    }, {
+      match = "!override_redirect && window_type = 'normal'";
+      @include "ws-direction/wall.conf"
+    });
+
+and a key in your window manager that runs the command. In the i3 config:
+
+    set $overview exec --no-startup-id ws-direction overview
+    bindsym $mod+Tab $overview toggle
+
+[i3](#i3) below has a mode with keys to move through the overview.
+
 To check that it works:
 
 - `ws-direction --version` prints `ws-direction` and the version. That also shows the
@@ -140,12 +157,14 @@ part, for a slower switch. What a family of styles shares is in one file in
 - **flip**: the workspace turns over like a card, in perspective, with the new one on its
   back; a switch that passes workspaces flips past them. Like cube, it is best with glx
   or egl.
+- **wall**: not a switch style, but an overview. A key unfolds the monitor's workspaces
+  into a strip of tiles that fits on the monitor, see [Overview styles](#overview-styles).
 
 Every switch style moves all workspaces of the monitor in a switch, through `ws-pass`: a
 switch that passes workspaces shows them on the way (going from 1 to 4, the windows of 2
 and 3 come by), and a switch made while one runs goes on from where every window is.
-They all draw hidden windows from the images picom keeps of them; see
-[Hidden workspaces](#hidden-workspaces).
+The overviews draw every workspace of the monitor. They all draw hidden windows from
+the images picom keeps of them; see [Hidden workspaces](#hidden-workspaces).
 
 The styles are plain picom animation scripts, and each file explains in its header how
 it works and which `var-*` you can change. To change one, copy it into your config
@@ -170,7 +189,9 @@ change it in one place and styles that go together can't drift apart:
   and `var-dip`.
 - `box.conf`, for cube and flip: `var-n` (the sides of the box) and `var-camera` (how far
   the eye is, in sides).
-- `zoom.conf`, for the zoom styles: `var-zoom` and `var-gap`.
+- `zoom.conf`, for the zoom styles and wall: `var-zoom` and `var-gap`, so the overview's
+  strip is the one the switches pan along.
+- `overview.conf`, for wall: `var-fill` and `var-dim`.
 - `prism.conf` and `prism-view.conf`: how cube and flip draw the box, and how far it
   moves back in a switch.
 
@@ -339,6 +360,45 @@ picom ignores a start on a window it has no image of yet, and on a window whose 
 no `ws-pass` animation. Such a window gets its `show` or `hide` as usual. So pass-slide
 also has `show` and `hide` blocks, which move a window the same way in a switch, and fade
 it outside one.
+
+### Overview styles
+
+What the overview looks like is up to the style. The plugin starts `ws-unfold` on every
+window of the monitor's workspaces when the overview opens, again on every workspace
+switch on that monitor while it is open, again when its workspaces or windows change
+while it is open (a window opens, closes or moves to another workspace, or a workspace
+comes or goes), and `ws-fold` when it closes (see [Triggers](#triggers)). A style that
+carries its pose by the names of its variables, as wall and unfold carry `var-pos`, goes
+on from where each window is. A window on all desktops (sticky) on that monitor gets
+`ws-unfold` and `ws-fold` too, with `index` set to `shown`, so the style puts it on the
+shown tile. An overview style only animates those two, so it goes in a
+second rule next to the switch style, as in [Quick start](#quick-start).
+
+Place the tiles by `plugin-ws-direction-index` and `plugin-ws-direction-shown`: they
+don't depend on a switch. Inside `ws-unfold`, `direction` is not 0 only when it starts
+for a switch while the overview is open; `face` then counts from the workspace shown
+before that switch. When the overview opens, `ws-unfold` is for no switch, also right
+after one: the plugin can't know whether the switch's animation still runs (picom
+doesn't tell it when an animation ends). A style that opens the overview from the pose
+of a switch that still runs carries that pose over by the names of its variables, as
+for a switch made while one runs (see
+[Workspaces a switch passes](#workspaces-a-switch-passes)).
+
+`styles/wall.conf` zooms out along the strip of workspaces of pass-zoom-pan, keeps the
+shown workspace bright and dims the others. It holds its pose with picom's `hold`
+output, so it costs no frames while it is open, and it suppresses `show` and `hide`, so
+switching workspaces while it is open only moves the bright tile. `styles/unfold.conf`
+does the same for cube: the box of workspaces opens up into a flat strip, and closes
+again with the shown workspace in front. Both carry over what the switch style's pose
+has when the overview opens during a switch: the place on the strip (`var-pos`), wall
+the zoom (`var-k`) and unfold how far back the box is (`var-back`), so the overview
+starts from where the windows are.
+
+After a click on a window of another workspace, `ws-fold` starts together with the switch
+to that workspace, so in it `plugin-ws-direction-shown` is the picked workspace already.
+A fold style carries over what depends on it from the held pose, as wall and unfold do
+with `var-pos` and `var-bright`, and suppresses `show` and `hide`, as for a switch while
+the overview is open.
 
 ### Backdrops
 

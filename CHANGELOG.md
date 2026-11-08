@@ -48,6 +48,7 @@ Styles:
   `var-follow` in `parts/switch.conf`.
 - The pass styles pass-slide, pass-zoom-pan and pass-zoom-cascade.
 - cube and flip, turned in perspective through the corner outputs.
+- The overview wall.
 
 Switch passes:
 
