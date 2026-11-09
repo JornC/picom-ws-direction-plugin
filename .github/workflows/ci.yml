@@ -1,6 +1,9 @@
-# The plugin needs plugin API 0.9 of the picom fork, which only the fork has so far. Both
-# jobs fetch the fork at PICOM_REF from github.com/JornC/picom: its branch winanim,
-# until it is tagged.
+# The plugin needs plugin API 0.9 of the picom fork, which only the fork has so far. The
+# build jobs fetch its API headers at PICOM_REF from github.com/JornC/picom: its branch
+# winanim, until it is tagged.
+#
+# The harness, tests/run.sh, doesn't run here, only locally: on GitHub's runners picom
+# draws a frame only every 60 ms or so, too few for its checks of motion to judge.
 #
 # clang-format output differs between major versions, so the formatting check pins
 # clang-format 23.1.3, the version the code is formatted with. shellcheck is pinned to
@@ -87,53 +90,3 @@ jobs:
         run: |
           shellcheck --version
           make lint
-
-  harness:
-    # tests/run.sh: picom with the plugin on a nested Xvfb with i3. Debian trixie has
-    # what it needs as packages: GCC 14, i3, and ImageMagick 7, whose magick command the
-    # harness uses.
-    runs-on: ubuntu-latest
-    container: debian:trixie
-    timeout-minutes: 60
-    steps:
-      - name: Install the tools
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends ca-certificates git gcc make \
-            pkg-config meson ninja-build \
-            libconfig-dev libdbus-1-dev libegl-dev libev-dev libgl-dev libepoxy-dev \
-            libpcre2-dev libpixman-1-dev libx11-xcb-dev libxcb1-dev \
-            libxcb-composite0-dev libxcb-damage0-dev libxcb-glx0-dev libxcb-image0-dev \
-            libxcb-present-dev libxcb-randr0-dev libxcb-render0-dev \
-            libxcb-render-util0-dev libxcb-shape0-dev libxcb-sync-dev libxcb-util-dev \
-            libxcb-xfixes0-dev uthash-dev \
-            xvfb x11-xserver-utils x11-utils libgl1-mesa-dri libglx-mesa0 \
-            i3-wm xterm xdotool imagemagick dbus jq python3 \
-            xfonts-base fonts-dejavu-core
-
-      - uses: actions/checkout@v4
-
-      - name: Fetch the picom fork
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PICOM_REPOSITORY }}
-          ref: ${{ env.PICOM_REF }}
-          path: picom
-
-      - name: Build and install picom
-        run: |
-          # --libdir=lib: without it meson picks lib64 in this container, where pkg-config
-          # doesn't look for picom-api.pc.
-          meson setup --buildtype=release --libdir=lib picom/build picom
-          ninja -C picom/build
-          ninja -C picom/build install
-
-      - name: Unit tests and harness
-        run: make check-all PICOM=/usr/local/bin/picom
-
-      - name: Keep the harness's logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: harness-logs
-          path: /tmp/wsdir-91/picom-wsdir
